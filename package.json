@@ -1,0 +1,37 @@
+{
+  "name": "andre2-backend",
+  "version": "1.0.0",
+  "main": "src/index.ts",
+  "scripts": {
+    "start": "node dist/index.js",
+    "dev": "nodemon",
+    "build": "tsc",
+    "watch": "tsc -w",
+    "test": "jest",
+    "test:fair": "ts-node src/__tests__/fairInsertTrack.test.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.5.0",
+    "express": "^5.1.0",
+    "node-fetch": "^2.7.0",
+    "uuid": "^9.0.1",
+    "ws": "^8.16.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.3",
+    "@types/node": "^24.0.1",
+    "@types/node-fetch": "^2.6.12",
+    "@types/spotify-web-api-node": "^5.0.11",
+    "@types/uuid": "^9.0.8",
+    "@types/ws": "^8.5.10",
+    "nodemon": "^3.1.10",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.8.3"
+  }
+}
