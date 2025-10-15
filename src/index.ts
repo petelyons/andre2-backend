@@ -19,7 +19,7 @@ dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 3001;
-const wsPort = 3002;
+const wsPort = process.env.WS_PORT ? parseInt(process.env.WS_PORT, 10) : 3002;
 
 var webSocketServerStarted: boolean = false;
 

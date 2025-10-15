@@ -146,10 +146,10 @@ function createSpotifyRouter(sessions: Map<string, any>) {
                         session.state.spotify.name = profile.body.display_name;
                         session.state.spotify.email = profile.body.email;
                         sessions.set(sessionId, session);
-                        res.redirect(`http://localhost:3000/?sessionId=${sessionId}`);
+                        res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:3000'}/?sessionId=${sessionId}`);
                     });
                 } else {
-                    res.redirect(`http://localhost:3000/?sessionId=${sessionId}`);
+                    res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:3000'}/?sessionId=${sessionId}`);
                 }
             })
             .catch((err: Error) => {
