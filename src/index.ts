@@ -160,35 +160,35 @@ const allowedOrigins = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(",").map((o) => o.trim())
   : ["*"];
 
-app.use((req: Request, res: Response, next: NextFunction) => {
-  const origin = req.headers.origin;
+// Use the cors package for more robust CORS handling
+const corsOptions = {
+  origin: (
+    origin: string | undefined,
+    callback: (err: Error | null, allow?: boolean | string) => void,
+  ) => {
+    // Allow requests with no origin (like mobile apps, Postman, or same-origin)
+    if (!origin) {
+      callback(null, true);
+      return;
+    }
 
-  // Set CORS headers
-  if (allowedOrigins.includes("*")) {
-    res.header("Access-Control-Allow-Origin", "*");
-  } else if (origin && allowedOrigins.includes(origin)) {
-    res.header("Access-Control-Allow-Origin", origin);
-    res.header("Access-Control-Allow-Credentials", "true");
-  } else if (origin) {
-    // Origin not allowed, but still need to set headers for proper CORS error
-    res.header("Access-Control-Allow-Origin", origin);
-  }
+    if (allowedOrigins.includes("*")) {
+      callback(null, true);
+    } else if (allowedOrigins.includes(origin)) {
+      callback(null, origin);
+    } else {
+      // Still allow but log it
+      logger.warn(`Origin not in allowed list: ${origin}`);
+      callback(null, origin);
+    }
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+  allowedHeaders: "*",
+  maxAge: 86400,
+};
 
-  res.header(
-    "Access-Control-Allow-Methods",
-    "GET, POST, PUT, DELETE, OPTIONS, PATCH",
-  );
-  res.header("Access-Control-Allow-Headers", "*");
-  res.header("Access-Control-Max-Age", "86400");
-
-  // Handle preflight
-  if (req.method === "OPTIONS") {
-    res.sendStatus(200);
-    return;
-  }
-  next();
-});
-
+app.use(cors(corsOptions));
 app.use(express.json());
 
 // Store active sessions
