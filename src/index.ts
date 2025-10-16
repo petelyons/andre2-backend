@@ -139,6 +139,9 @@ app.use(cors({
 }));
 app.use(express.json());
 
+// Handle preflight requests
+app.options('*', cors());
+
 // Store active sessions
 const sessions = new Map<string, Session>();
 const sessionCleanupTimers = new Map<string, NodeJS.Timeout>();
