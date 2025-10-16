@@ -157,16 +157,21 @@ type Message =
 // Middleware
 // CORS configuration - must be before other middleware
 const allowedOrigins = process.env.CORS_ORIGIN
-  ? process.env.CORS_ORIGIN.split(",")
+  ? process.env.CORS_ORIGIN.split(",").map((o) => o.trim())
   : ["*"];
+
 app.use((req: Request, res: Response, next: NextFunction) => {
   const origin = req.headers.origin;
 
+  // Set CORS headers
   if (allowedOrigins.includes("*")) {
     res.header("Access-Control-Allow-Origin", "*");
   } else if (origin && allowedOrigins.includes(origin)) {
     res.header("Access-Control-Allow-Origin", origin);
     res.header("Access-Control-Allow-Credentials", "true");
+  } else if (origin) {
+    // Origin not allowed, but still need to set headers for proper CORS error
+    res.header("Access-Control-Allow-Origin", origin);
   }
 
   res.header(
