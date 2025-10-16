@@ -132,7 +132,28 @@ interface PlayHistoryEntry {
 type Message = LoginMessage | GenericMessage | PlayTrackMessage | GetTracksMessage | JamMessage | PlayMessage | PauseMessage | SessionPlayMessage | SessionPauseMessage | GetSessionsMessage | RemoveTrackMessage | AirhornMessage | GetPlayHistoryMessage | MasterSkipMessage;
 
 // Middleware
-app.use(cors());
+const corsOptions = {
+    origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+        const allowedOrigins = [
+            'http://localhost:3000',
+            'http://localhost:3001',
+            process.env.FRONTEND_URL || '',
+            'https://andre2-frontend-production.up.railway.app',
+        ].filter(Boolean);
+        
+        // Allow requests with no origin (like mobile apps or Postman)
+        if (!origin || allowedOrigins.includes(origin)) {
+            callback(null, true);
+        } else {
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'spotify-access-token', 'Authorization'],
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
 
 // Store active sessions
