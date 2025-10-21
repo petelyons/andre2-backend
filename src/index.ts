@@ -7,6 +7,7 @@ import logger from './logger';
 import { createSpotifyRouter, getSpotifyTrackInfo, spotifyDelegate } from './spotify';
 import fs from 'fs';
 import path from 'path';
+import http from 'http';
 // Import types if available
 // import { SpotifyApi } from 'spotify-web-api-node';
 
@@ -19,7 +20,6 @@ dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 3001;
-const wsPort = process.env.WS_PORT ? parseInt(process.env.WS_PORT, 10) : 3002;
 
 var webSocketServerStarted: boolean = false;
 
@@ -679,17 +679,20 @@ function stopPolling() {
 }
 
 // Function to start WebSocket server with retry
-function startWebSocketServer(retries = 3, delay = 2000): void {
+function startWebSocketServer(server: http.Server): void {
     try {
         if (webSocketServerStarted) {
             logger.info('WebSocket server already started');
             return;
         }
         webSocketServerStarted = true;
-        logger.info(`Starting WebSocket server on port ${wsPort}`);
+        logger.info(`Starting WebSocket server on path /websocket`);
 
-        const wss = new WebSocketServer({ port: wsPort });
-        logger.info(`WebSocket server started on port ${wsPort}`);
+        const wss = new WebSocketServer({ 
+            server,
+            path: '/websocket'
+        });
+        logger.info(`WebSocket server started on path /websocket`);
 
         wss.on('connection', (ws: WebSocket) => {
             logger.info('=== NEW WEBSOCKET CONNECTION ===');
@@ -1098,13 +1101,8 @@ function startWebSocketServer(retries = 3, delay = 2000): void {
         });
 
     } catch (error) {
-        if (retries > 0) {
-            logger.info(`Failed to start WebSocket server. Retrying in ${delay/1000} seconds... (${retries} attempts remaining)`);
-            setTimeout(() => startWebSocketServer(retries - 1, delay), delay);
-        } else {
-            logger.error('Failed to start WebSocket server after multiple attempts:', error);
-            process.exit(1);
-        }
+        logger.error('Failed to start WebSocket server:', error);
+        process.exit(1);
     }
 }
 
@@ -1451,7 +1449,7 @@ app.get('/api/debug/health', (req: Request, res: Response) => {
         environment: {
             NODE_ENV: process.env.NODE_ENV || 'development',
             PORT: port,
-            WS_PORT: wsPort,
+            WS_PATH: '/websocket',
             FRONTEND_URL: process.env.FRONTEND_URL || 'not set',
             SPOTIFY_CLIENT_ID: process.env.SPOTIFY_CLIENT_ID ? 'set' : 'not set',
             SPOTIFY_CLIENT_SECRET: process.env.SPOTIFY_CLIENT_SECRET ? 'set' : 'not set',
@@ -1516,11 +1514,13 @@ function formatUptime(seconds: number): string {
   loadTracksFromFile();
   cleanupInvalidSessions();
   
-app.listen(port, () => {
+  const httpServer = http.createServer(app);
+  
+  httpServer.listen(port, () => {
     logger.info(`HTTP Server is running on port ${port}`);
-    // Start WebSocket server on separate port
-    startWebSocketServer(); 
-}); 
+    // Start WebSocket server on same port at /websocket path
+    startWebSocketServer(httpServer); 
+  }); 
 })(); 
 
 function broadcastHistory() {
@@ -1648,7 +1648,7 @@ function fairInsertTrack(track: SubmittedTrack, queue: SubmittedTrack[]) {
 // Log all configured values at startup
 logger.info('Configured values:');
 logger.info(`  HTTP port: ${port}`);
-logger.info(`  WebSocket port: ${wsPort}`);
+logger.info(`  WebSocket path: /websocket`);
 logger.info(`  POLL_INTERVAL_MS: ${POLL_INTERVAL_MS}`);
 logger.info(`  DEBUG: ${DEBUG}`);
 logger.info(`  Tracks file: ${TRACKS_FILE}`);

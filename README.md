@@ -54,7 +54,7 @@ npm run dev
 
 The server will be available at:
 - HTTP API: http://localhost:3001
-- WebSocket: ws://localhost:3002
+- WebSocket: ws://localhost:3001/websocket
 
 ## Scripts
 
