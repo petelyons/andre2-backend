@@ -1287,8 +1287,8 @@ function cleanupInvalidSessions() {
 // Configuration class
 class Config {
     private static config = {
-        airhornsDir: path.join(__dirname, '../../frontend/public/airhorns'),
-        // Add other config values here as needed
+        // Hardcoded list of available airhorns (must match frontend's /public/airhorns/)
+        airhorns: ['air-horn', 'evil-giggle', 'here-we-go', 'ship-horn', 'vintage-car-horn']
     };
     static get(key: keyof typeof Config.config) {
         return Config.config[key];
@@ -1297,16 +1297,7 @@ class Config {
 
 // REST endpoint to list available airhorns
 app.get('/api/airhorns', (req: Request, res: Response) => {
-    const airhornDir = Config.get('airhornsDir');
-    let airhorns: string[] = [];
-    try {
-        airhorns = fs.readdirSync(airhornDir)
-            .filter(f => f.endsWith('.mp3'))
-            .map(f => f.replace(/\.mp3$/, ''));
-    } catch (err) {
-        res.status(500).json({ error: 'Failed to read airhorns directory' });
-        return;
-    }
+    const airhorns = Config.get('airhorns');
     res.json({ airhorns });
 });
 
