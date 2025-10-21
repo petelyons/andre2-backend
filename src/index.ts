@@ -187,6 +187,10 @@ let lastPlaybackState: {
     is_playing: boolean | null;
 } | null = null;
 
+// Track when we last commanded a track change (to allow grace period)
+let lastTrackChangeCommand: number = 0;
+const TRACK_CHANGE_GRACE_PERIOD_MS = 3000; // 3 seconds for Spotify to respond
+
 // Event history
 const history: HistoryEvent[] = [];
 
@@ -468,6 +472,7 @@ async function pollMasterUserPlayback() {
                 saveTracksToFile();
                 logger.info(`Now playing: ${currentlyPlayingTrack.name || currentlyPlayingTrack.spotifyUri}`);
                 masterTrackStarted = false; // Reset flag for new track
+                lastTrackChangeCommand = Date.now(); // Mark that we commanded a track change
                 // Play the new track for all sessions with session_play mode
                 for (const [sid, sess] of sessions.entries()) {
                     const sessionMode = sessionModes.get(sid);
@@ -529,19 +534,52 @@ async function pollMasterUserPlayback() {
             const newState = curr.is_playing ? 'play' : 'pause';
             
             // Check if master is playing the correct track
+            // BUT: Don't correct if the track they're playing is in our queue (natural transition case)
+            // AND: Don't correct if we just commanded a track change (grace period for Spotify to respond)
             if (currentlyPlayingTrack && curr.uri) {
                 const masterTrackUri = curr.uri;
+                const isTrackInQueue = submittedTracks.some(t => t.spotifyUri === masterTrackUri);
+                const timeSinceLastCommand = Date.now() - lastTrackChangeCommand;
+                const inGracePeriod = timeSinceLastCommand < TRACK_CHANGE_GRACE_PERIOD_MS;
+                
                 if (masterTrackUri !== currentlyPlayingTrack.spotifyUri) {
-                    // Attempt to play the correct track for the master user
-                    logger.warn(`Master user is playing ${masterTrackUri} but should be playing ${currentlyPlayingTrack.spotifyUri}. Attempting to correct...`);
-                    try {
-                        await spotifyDelegate.play(masterSession.state.spotify.access_token, { uris: [currentlyPlayingTrack.spotifyUri] });
-                        logger.info(`Successfully started correct track (${currentlyPlayingTrack.spotifyUri}) for master user.`);
-                    } catch (err) {
-                        logger.error(`Failed to start correct track for master user:`, err);
-                        const errMsg = getErrorMessage(err);
-                        if (errMsg.includes('NO_ACTIVE_DEVICE') || errMsg.includes('No active device found')) {
-                            notifyUserToActivateDevice(masterUserSessionId);
+                    if (inGracePeriod) {
+                        // We just commanded a track change, give Spotify time to respond
+                        logger.info(`Track mismatch but within grace period (${timeSinceLastCommand}ms), waiting for Spotify to catch up...`);
+                    } else if (isTrackInQueue) {
+                        // Master has naturally advanced to a track in our queue - update our state to match
+                        logger.info(`Master naturally advanced to ${masterTrackUri} which is in queue. Syncing state...`);
+                        // Find and set as current, remove from queue
+                        const queueIndex = submittedTracks.findIndex(t => t.spotifyUri === masterTrackUri);
+                        if (queueIndex !== -1) {
+                            // Add old track to play history
+                            if (currentlyPlayingTrack) {
+                                playHistory.push({
+                                    timestamp: Date.now(),
+                                    track: { ...currentlyPlayingTrack },
+                                    startedBy: masterUserSessionId ? (sessions.get(masterUserSessionId)?.state?.spotify?.name || sessions.get(masterUserSessionId)?.state?.listener?.name || '') : undefined
+                                });
+                            }
+                            // Set new current track
+                            currentlyPlayingTrack = submittedTracks.splice(queueIndex, 1)[0];
+                            masterTrackStarted = true;
+                            saveTracksToFile();
+                            broadcastTrackList();
+                            broadcastMode();
+                            broadcastPlayHistory();
+                        }
+                    } else {
+                        // Master is playing something not in our queue - try to correct
+                        logger.warn(`Master user is playing ${masterTrackUri} but should be playing ${currentlyPlayingTrack.spotifyUri}. Attempting to correct...`);
+                        try {
+                            await spotifyDelegate.play(masterSession.state.spotify.access_token, { uris: [currentlyPlayingTrack.spotifyUri] });
+                            logger.info(`Successfully started correct track (${currentlyPlayingTrack.spotifyUri}) for master user.`);
+                        } catch (err) {
+                            logger.error(`Failed to start correct track for master user:`, err);
+                            const errMsg = getErrorMessage(err);
+                            if (errMsg.includes('NO_ACTIVE_DEVICE') || errMsg.includes('No active device found')) {
+                                notifyUserToActivateDevice(masterUserSessionId);
+                            }
                         }
                     }
                 }
@@ -581,6 +619,7 @@ async function pollMasterUserPlayback() {
                         saveTracksToFile();
                         logger.info(`Now playing: ${currentlyPlayingTrack.name || currentlyPlayingTrack.spotifyUri}`);
                         masterTrackStarted = false; // Reset flag for new track
+                        lastTrackChangeCommand = Date.now(); // Mark that we commanded a track change
                         
                         // Play the new track for all sessions with session_play mode
                         for (const [sid, sess] of sessions.entries()) {
@@ -925,6 +964,7 @@ function startWebSocketServer(server: http.Server): void {
                                 }
                                 // Play/resume the current track on Spotify for each session
                                 if (currentlyPlayingTrack && currentlyPlayingTrack.spotifyUri) {
+                                    lastTrackChangeCommand = Date.now(); // Mark that we commanded playback
                                     for (const [sid, sess] of sessions.entries()) {
                                         const accessToken = sess.state?.spotify?.access_token;
                                         if (accessToken) {
@@ -1046,6 +1086,7 @@ function startWebSocketServer(server: http.Server): void {
                                     currentlyPlayingTrack = submittedTracks.shift()!;
                                     saveTracksToFile();
                                     masterTrackStarted = false;
+                                    lastTrackChangeCommand = Date.now(); // Mark that we commanded a track change
                                     // Play the new track for all sessions with session_play mode
                                     for (const [sid, sess] of sessions.entries()) {
                                         const sessionMode = sessionModes.get(sid);
