@@ -134,6 +134,14 @@ type Message = LoginMessage | GenericMessage | PlayTrackMessage | GetTracksMessa
 // Middleware
 // CORS configuration - must be before other middleware
 app.use((req: Request, res: Response, next: NextFunction) => {
+    // Log all incoming requests
+    logger.info(`[CORS] ${req.method} ${req.path}`, {
+        origin: req.headers.origin,
+        referer: req.headers.referer,
+        userAgent: req.headers['user-agent'],
+        contentType: req.headers['content-type'],
+    });
+    
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
     res.header('Access-Control-Allow-Headers', '*');
@@ -141,6 +149,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
     
     // Handle preflight
     if (req.method === 'OPTIONS') {
+        logger.info(`[CORS] Preflight request handled for ${req.path}`);
         res.sendStatus(200);
         return;
     }
@@ -1463,9 +1472,10 @@ function formatUptime(seconds: number): string {
   await loadSessionsFromFile();
   loadTracksFromFile();
   cleanupInvalidSessions();
+  
 app.listen(port, () => {
     logger.info(`HTTP Server is running on port ${port}`);
-    // Start WebSocket server after HTTP server is running
+    // Start WebSocket server on separate port
     startWebSocketServer(); 
 }); 
 })(); 
