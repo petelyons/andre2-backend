@@ -1163,7 +1163,30 @@ app.post('/api/tracks', async (req: Request, res: Response): Promise<void> => {
 // Endpoint to check session state
 app.get('/api/session/:sessionId', (req: Request, res: Response) => {
     const sessionId = req.params.sessionId;
+    logger.info('=== SESSION CHECK ===', { sessionId });
+    
     const session = sessions.get(sessionId);
+    
+    if (session) {
+        logger.info('Session found', {
+            sessionId,
+            hasState: !!session.state,
+            hasSpotify: !!session.state?.spotify,
+            hasSpotifyToken: !!session.state?.spotify?.access_token,
+            spotifyEmail: session.state?.spotify?.email,
+            spotifyName: session.state?.spotify?.name,
+            hasListener: !!session.state?.listener,
+            listenerEmail: session.state?.listener?.email,
+            listenerName: session.state?.listener?.name,
+        });
+    } else {
+        logger.warn('Session not found', {
+            sessionId,
+            totalSessions: sessions.size,
+            availableSessions: Array.from(sessions.keys()),
+        });
+    }
+    
     if (
         session &&
         session.state &&
@@ -1172,8 +1195,10 @@ app.get('/api/session/:sessionId', (req: Request, res: Response) => {
             (session.state.listener && session.state.listener.name && session.state.listener.email)
         )
     ) {
+        logger.info('Session is valid - returning loggedIn: true', { sessionId });
         res.json({ loggedIn: true });
     } else {
+        logger.warn('Session is invalid - returning loggedIn: false', { sessionId });
         res.json({ loggedIn: false });
     }
 });

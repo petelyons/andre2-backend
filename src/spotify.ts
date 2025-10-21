@@ -103,6 +103,7 @@ function createSpotifyRouter(sessions: Map<string, any>) {
 
     // /api/spotify/login
     spotifyRouter.get('/login', (req: Request, res: Response) => {
+        logger.info('=== SPOTIFY LOGIN INITIATED ===');
         const scopes = [
             'user-read-private',
             'user-read-email',
@@ -114,25 +115,51 @@ function createSpotifyRouter(sessions: Map<string, any>) {
         ];
         // Generate a sessionId and use it as the state parameter
         const sessionId = uuidv4();
+        logger.info(`Created session for Spotify login:`, { sessionId });
         // Optionally, create a session entry for this sessionId
         // The sessions map must be managed in the main app
         // We'll pass sessionId back to the main app for session management
         sessions.set(sessionId, { ws: null, userId: null, state: {} });
         const authorizeURL = spotifyDelegate.createAuthorizeURL(scopes, sessionId);
+        logger.info(`Redirecting to Spotify with URL:`, { authorizeURL });
         res.redirect(authorizeURL);
     });
 
     // /api/spotify/callback
     spotifyRouter.get('/callback', (req: Request, res: Response) => {
+        logger.info('=== SPOTIFY CALLBACK RECEIVED ===', {
+            query: req.query,
+            hasCode: !!req.query.code,
+            hasState: !!req.query.state,
+        });
+        
         const code = req.query.code as string;
         const sessionId = req.query.state as string;
+        
         if (!code || !sessionId) {
+            logger.error('Missing code or sessionId in callback', { code: !!code, sessionId: !!sessionId });
             res.status(400).json({ error: 'Missing code or state (sessionId) from Spotify callback' });
             return;
         }
+        
+        logger.info('Exchanging code for tokens...', { sessionId });
+        
         spotifyDelegate.authorizationCodeGrant(code)
             .then((data: any) => {
+                logger.info('Received tokens from Spotify', {
+                    sessionId,
+                    hasAccessToken: !!data.body['access_token'],
+                    hasRefreshToken: !!data.body['refresh_token'],
+                    expiresIn: data.body['expires_in'],
+                });
+                
                 const session = sessions.get(sessionId);
+                logger.info('Session lookup result:', {
+                    sessionId,
+                    sessionExists: !!session,
+                    totalSessions: sessions.size,
+                });
+                
                 if (session) {
                     session.state.spotify = {
                         access_token: data.body['access_token'],
@@ -140,19 +167,59 @@ function createSpotifyRouter(sessions: Map<string, any>) {
                         expires_in: data.body['expires_in'],
                     };
                     spotifyDelegate.setAccessToken(data.body['access_token']);
+                    
+                    logger.info('Fetching Spotify user profile...', { sessionId });
+                    
                     // Fetch user profile
                     return spotifyDelegate.getMe().then((profile: any) => {
+                        logger.info('Spotify profile fetched', {
+                            sessionId,
+                            userId: profile.body.id,
+                            displayName: profile.body.display_name,
+                            email: profile.body.email,
+                        });
+                        
                         session.userId = profile.body.id;
                         session.state.spotify.name = profile.body.display_name;
                         session.state.spotify.email = profile.body.email;
                         sessions.set(sessionId, session);
-                        res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:3000'}/?sessionId=${sessionId}`);
+                        
+                        logger.info('Session updated successfully', {
+                            sessionId,
+                            userId: session.userId,
+                            hasSpotifyState: !!session.state.spotify,
+                            spotifyEmail: session.state.spotify.email,
+                            spotifyName: session.state.spotify.name,
+                        });
+                        
+                        // Verify session was stored
+                        const storedSession = sessions.get(sessionId);
+                        logger.info('Verification: Session stored check', {
+                            sessionId,
+                            stored: !!storedSession,
+                            hasSpotifyInStored: !!storedSession?.state?.spotify,
+                        });
+                        
+                        const redirectUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/?sessionId=${sessionId}`;
+                        logger.info('Redirecting to frontend', { redirectUrl, sessionId });
+                        res.redirect(redirectUrl);
                     });
                 } else {
-                    res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:3000'}/?sessionId=${sessionId}`);
+                    logger.error('Session not found!', {
+                        sessionId,
+                        availableSessions: Array.from(sessions.keys()),
+                    });
+                    const redirectUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/?sessionId=${sessionId}&error=session_not_found`;
+                    logger.warn('Redirecting to frontend with error', { redirectUrl });
+                    res.redirect(redirectUrl);
                 }
             })
             .catch((err: Error) => {
+                logger.error('Spotify token exchange failed', {
+                    sessionId,
+                    error: err.message,
+                    stack: err.stack,
+                });
                 res.status(400).json({ error: 'Failed to get tokens from Spotify', details: err.message });
             });
     });
