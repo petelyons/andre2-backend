@@ -264,15 +264,25 @@ function broadcastTrackList() {
         albumArtUrl: t.albumArtUrl,
         jammers: t.jammers || []
     }));
+    
+    logger.info('=== BROADCASTING TRACK LIST ===', {
+        totalTracks: trackList.length,
+        totalSessions: sessions.size,
+    });
+    
+    let broadcastCount = 0;
     for (const [sessionId, session] of sessions.entries()) {
         if (!session.ws || session.ws.readyState !== 1) { // 1 = OPEN
-            logger.info(`Skipping broadcast to session ${sessionId} (WebSocket not open)`);
+            logger.info(`Skipping broadcast to session ${sessionId} (WebSocket not open, state: ${session.ws?.readyState})`);
             // Do NOT remove closed sessions here; let the cleanup timer handle it
             continue;
         }
-        logger.info(`Broadcasting to: ${session.userId}`);
+        logger.info(`Broadcasting tracks to session: ${sessionId}`);
         session.ws && session.ws.send(JSON.stringify({ type: 'tracks_list', tracks: trackList }));
+        broadcastCount++;
     }
+    
+    logger.info(`Broadcast complete: sent to ${broadcastCount} sessions`);
 }
 
 function broadcastMode() {
@@ -682,6 +692,7 @@ function startWebSocketServer(retries = 3, delay = 2000): void {
         logger.info(`WebSocket server started on port ${wsPort}`);
 
         wss.on('connection', (ws: WebSocket) => {
+            logger.info('=== NEW WEBSOCKET CONNECTION ===');
             let sessionId: string = '';
             let session: Session | null = null;
 
@@ -689,17 +700,24 @@ function startWebSocketServer(retries = 3, delay = 2000): void {
             ws.on('message', async (data: Buffer) => {
                 try {
                     const message: Message = JSON.parse(data.toString());
+                    logger.info(`WebSocket message received: ${message.type}`, { sessionId: sessionId || 'none' });
+                    
                     switch (message.type) {
                         case 'login':
                             sessionId = message.userId || '';
+                            logger.info('=== WEBSOCKET LOGIN ATTEMPT ===', { sessionId });
+                            
                             if (sessionId && sessions.has(sessionId)) {
                                 session = sessions.get(sessionId)!;
                                 session.ws = ws;
-                                logger.info(`Reusing session: ${sessionId}`);
+                                logger.info(`Reusing existing session: ${sessionId}`, {
+                                    hasSpotify: !!session.state?.spotify,
+                                    hasListener: !!session.state?.listener,
+                                });
                             } else if (sessionId) {
                                 session = { ws, userId: sessionId, state: {} };
                                 sessions.set(sessionId, session);
-                                logger.info(`Created new session: ${sessionId}`);
+                                logger.warn(`Created new empty session (should not happen): ${sessionId}`);
                             }
                             // Clear any pending cleanup timer
                             if (sessionId && sessionCleanupTimers.has(sessionId)) {
