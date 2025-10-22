@@ -181,13 +181,17 @@ export class QueueManager {
                 spotifyDelegate.getPlaylistTracks(accessToken, playlistId)
             ]);
 
+            // Store playlist name first, then populate queue
+            this.currentFallbackPlaylistUrl = playlistUrl;
+            this.currentFallbackPlaylistName = playlistInfo.name;
+            
             // Clear existing fallback queue and populate with new tracks
             this.fallbackQueue.length = 0;
             for (const track of tracks) {
                 this.fallbackQueue.push({
                     spotifyUri: track.spotifyUri,
                     userEmail: 'fallback@system',
-                    spotifyName: 'Fallback Playlist',
+                    spotifyName: playlistInfo.name, // Use actual playlist name
                     timestamp: Date.now(),
                     name: track.name,
                     artist: track.artist,
@@ -195,9 +199,6 @@ export class QueueManager {
                     albumArtUrl: track.albumArtUrl
                 });
             }
-
-            this.currentFallbackPlaylistUrl = playlistUrl;
-            this.currentFallbackPlaylistName = playlistInfo.name;
             logger.info(`Loaded ${this.fallbackQueue.length} tracks from fallback playlist "${playlistInfo.name}"`);
             return true;
         } catch (err) {

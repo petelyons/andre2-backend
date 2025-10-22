@@ -141,6 +141,73 @@ class SpotifyApiDelegate {
         
         return null;
     }
+
+    /**
+     * Parse and normalize Spotify input (URL, URI, or ID) into a standardized URI
+     * Returns an object with the entity type and normalized URI, or null if invalid
+     */
+    parseSpotifyInput(input: string): { type: 'track' | 'playlist' | 'album' | 'artist' | 'episode' | 'show'; uri: string; id: string } | null {
+        if (!input || typeof input !== 'string') {
+            return null;
+        }
+
+        const trimmed = input.trim();
+
+        // Pattern definitions for different Spotify entity types
+        const patterns = [
+            // URLs: https://open.spotify.com/track/6rqhFgbbKwnb9MLmUQDhG6
+            { regex: /(?:https?:\/\/)?open\.spotify\.com\/track\/([a-zA-Z0-9]+)(?:\?.*)?/, type: 'track' as const },
+            { regex: /(?:https?:\/\/)?open\.spotify\.com\/playlist\/([a-zA-Z0-9]+)(?:\?.*)?/, type: 'playlist' as const },
+            { regex: /(?:https?:\/\/)?open\.spotify\.com\/album\/([a-zA-Z0-9]+)(?:\?.*)?/, type: 'album' as const },
+            { regex: /(?:https?:\/\/)?open\.spotify\.com\/artist\/([a-zA-Z0-9]+)(?:\?.*)?/, type: 'artist' as const },
+            { regex: /(?:https?:\/\/)?open\.spotify\.com\/episode\/([a-zA-Z0-9]+)(?:\?.*)?/, type: 'episode' as const },
+            { regex: /(?:https?:\/\/)?open\.spotify\.com\/show\/([a-zA-Z0-9]+)(?:\?.*)?/, type: 'show' as const },
+            
+            // URIs: spotify:track:6rqhFgbbKwnb9MLmUQDhG6
+            { regex: /^spotify:track:([a-zA-Z0-9]+)$/, type: 'track' as const },
+            { regex: /^spotify:playlist:([a-zA-Z0-9]+)$/, type: 'playlist' as const },
+            { regex: /^spotify:album:([a-zA-Z0-9]+)$/, type: 'album' as const },
+            { regex: /^spotify:artist:([a-zA-Z0-9]+)$/, type: 'artist' as const },
+            { regex: /^spotify:episode:([a-zA-Z0-9]+)$/, type: 'episode' as const },
+            { regex: /^spotify:show:([a-zA-Z0-9]+)$/, type: 'show' as const },
+        ];
+
+        // Try to match against known patterns
+        for (const { regex, type } of patterns) {
+            const match = trimmed.match(regex);
+            if (match && match[1]) {
+                const id = match[1];
+                return {
+                    type,
+                    uri: `spotify:${type}:${id}`,
+                    id
+                };
+            }
+        }
+
+        // If no pattern matched, check if it's just an ID (22 characters, alphanumeric)
+        // Assume it's a track ID if it matches the pattern
+        if (/^[a-zA-Z0-9]{22}$/.test(trimmed)) {
+            return {
+                type: 'track',
+                uri: `spotify:track:${trimmed}`,
+                id: trimmed
+            };
+        }
+
+        return null;
+    }
+
+    /**
+     * Check if the input is a supported entity type for playback
+     */
+    isSupportedForPlayback(input: string): boolean {
+        const parsed = this.parseSpotifyInput(input);
+        if (!parsed) return false;
+        
+        // We support tracks and playlists
+        return parsed.type === 'track' || parsed.type === 'playlist';
+    }
 }
 
 const spotifyDelegate = new SpotifyApiDelegate();
