@@ -232,52 +232,59 @@ export class QueueManager {
      * Fair insertion algorithm - ensures even distribution of tracks among users
      */
     private fairInsertTrack(track: SubmittedTrack): void {
-        // Count tracks per user
+        // Null userEmail is treated as non-fair; append to end
+        if (!track.userEmail) {
+            this.submittedTracks.push(track);
+            return;
+        }
+
+        const thisUser = track.userEmail;
+
+        // Determine join order from first occurrence in the existing queue
+        const seenUsers = new Set<string>();
+        const joinOrder: string[] = [];
+        for (const t of this.submittedTracks) {
+            if (!t.userEmail) continue;
+            if (!seenUsers.has(t.userEmail)) {
+                seenUsers.add(t.userEmail);
+                joinOrder.push(t.userEmail);
+            }
+        }
+
+        // Count existing tracks per user to determine round for the new track
         const userCounts: Record<string, number> = {};
         for (const t of this.submittedTracks) {
             if (!t.userEmail) continue;
             userCounts[t.userEmail] = (userCounts[t.userEmail] || 0) + 1;
         }
+        const thisUserCount = userCounts[thisUser] || 0;
+        const newTrackRound = thisUserCount + 1; // 1-based
 
-        const thisUser = track.userEmail;
-        const thisUserCount = thisUser ? (userCounts[thisUser] || 0) : 0;
-
-        // Find the minimum count among all users (excluding this user if they have 0)
-        let minCount = Infinity;
-        for (const sid in userCounts) {
-            if (sid !== thisUser && userCounts[sid] < minCount) {
-                minCount = userCounts[sid];
-            }
-        }
-        if (minCount === Infinity) minCount = 0;
-
-        // Find the last index where this user has a track
+        // Keep insertion after this user's last existing track to preserve per-user order
         let lastUserIdx = -1;
-        let userSeen = 0;
         for (let i = 0; i < this.submittedTracks.length; ++i) {
             if (this.submittedTracks[i].userEmail === thisUser) {
-                userSeen++;
-                if (userSeen === thisUserCount) {
-                    lastUserIdx = i;
-                }
+                lastUserIdx = i;
             }
         }
 
-        // Find the first index after all tracks from users with fewer tracks
-        let insertIdx = this.submittedTracks.length;
-        if (thisUserCount > minCount) {
-            // Find the last index where a user with minCount tracks appears
-            const counts: Record<string, number> = { ...userCounts };
-            for (let i = 0; i < this.submittedTracks.length; ++i) {
-                const sid = this.submittedTracks[i].userEmail;
-                if (sid && counts[sid] === minCount) {
-                    insertIdx = i + 1;
-                }
+        // Pivot users are all users currently present (join order)
+        const pivotUsers = joinOrder;
+
+        // Scan the queue and find the last index that completes rounds <= newTrackRound for pivot users
+        const roundsSeen: Record<string, number> = {};
+        let boundaryIdx = -1;
+        for (let i = 0; i < this.submittedTracks.length; ++i) {
+            const sid = this.submittedTracks[i].userEmail;
+            if (!sid) continue;
+            const currentRound = (roundsSeen[sid] || 0) + 1;
+            roundsSeen[sid] = currentRound;
+            if (pivotUsers.includes(sid) && currentRound <= newTrackRound) {
+                boundaryIdx = i;
             }
         }
 
-        // Insert after the last track from this user, but not before insertIdx
-        const finalIdx = Math.max(lastUserIdx + 1, insertIdx);
+        const finalIdx = Math.max(lastUserIdx + 1, boundaryIdx + 1);
         this.submittedTracks.splice(finalIdx, 0, track);
     }
 }
