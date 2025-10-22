@@ -679,6 +679,16 @@ async function pollMasterUserPlayback() {
                     }
                     broadcastMode();
                 } else if (newState === 'pause' && mode !== 'master_pause') {
+                    // Check if we just commanded a track change (grace period)
+                    const timeSinceLastCommand = Date.now() - lastTrackChangeCommand;
+                    const inGracePeriod = timeSinceLastCommand < TRACK_CHANGE_GRACE_PERIOD_MS;
+                    
+                    if (inGracePeriod) {
+                        // We just commanded a track change, this pause is temporary during transition
+                        logger.info(`Pause detected but within grace period (${timeSinceLastCommand}ms), ignoring (likely track transition)`);
+                        return; // Don't change to master_pause
+                    }
+                    
                     // Check if pause is due to track completion before changing mode
                     if (masterTrackStarted && currentlyPlayingTrack?.progress && 
                         currentlyPlayingTrack.progress.position_ms > 0 && 
@@ -690,7 +700,7 @@ async function pollMasterUserPlayback() {
                             return; // Skip mode change, let completion logic handle advancement
                         }
                     }
-                    // Normal pause (not due to completion)
+                    // Normal pause (not due to completion or track transition)
                     mode = 'master_pause';
                     logger.info('Master user is paused, setting mode to master_pause');
                     broadcastMode();
