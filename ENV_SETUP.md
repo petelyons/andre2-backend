@@ -26,7 +26,8 @@ DEBUG=false
 MASTER_CONTROL_EMAILS=admin@example.com,pete@example.com
 
 # Optional: Fallback playlist URL to play when the main queue is empty
-# Default: spotify:playlist:37i9dQZF1DWUoqEG4WY6ce (Spotify's "Lorem" playlist)
+# Must be a user-created public playlist (Spotify-curated playlists are not supported)
+# Defaults to a public user playlist if not set
 FALLBACK_PLAYLIST_URL=https://open.spotify.com/playlist/your_playlist_id
 ```
 
@@ -79,7 +80,7 @@ FRONTEND_URL=https://andre2-frontend-production.up.railway.app
 POLL_INTERVAL_MS=1000
 DEBUG=false
 MASTER_CONTROL_EMAILS=admin@example.com
-# Optional - defaults to spotify:playlist:37i9dQZF1DWUoqEG4WY6ce if not set
+# Optional - must be a user-created public playlist (Spotify-curated playlists not supported)
 FALLBACK_PLAYLIST_URL=https://open.spotify.com/playlist/your_playlist_id
 ```
 

@@ -121,7 +121,8 @@ class SpotifyApiDelegate {
             imageUrl: data.body.images?.[0]?.url || null
         };
     }
-
+//https://open.spotify.com/playlist/37i9dQZF1DX9myttyycIxA
+// spotify:playlist:37i9dQZF1DX9myttyycIxA
     extractPlaylistId(url: string): string | null {
         // Match Spotify playlist URL patterns:
         // https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M
@@ -173,6 +174,7 @@ function createSpotifyRouter(sessions: Map<string, any>) {
             'user-read-playback-state',
             'user-modify-playback-state',
             'playlist-read-private',
+            'playlist-read-collaborative',
             'user-library-read',
             'user-library-modify',
         ];

@@ -15,7 +15,7 @@ export interface SubmittedTrack {
 }
 
 // Default fallback playlist (Spotify's "Lorem" playlist)
-const DEFAULT_FALLBACK_PLAYLIST = 'spotify:playlist:37i9dQZF1DWUoqEG4WY6ce';
+const DEFAULT_FALLBACK_PLAYLIST = 'spotify:playlist:4SGsOxUMBk9D7umiJGwdtQ';
 
 /**
  * Manages the music queue including user-submitted tracks and fallback playlist tracks
@@ -27,7 +27,10 @@ export class QueueManager {
     private currentFallbackPlaylistName: string = '';
 
     constructor(initialFallbackUrl?: string) {
-        this.currentFallbackPlaylistUrl = initialFallbackUrl || DEFAULT_FALLBACK_PLAYLIST;
+        // Use the provided URL if it's a non-empty string, otherwise use the default
+        this.currentFallbackPlaylistUrl = (initialFallbackUrl && initialFallbackUrl.trim()) 
+            ? initialFallbackUrl.trim() 
+            : DEFAULT_FALLBACK_PLAYLIST;
     }
 
     /**

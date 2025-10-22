@@ -1296,14 +1296,31 @@ app.post('/api/tracks', async (req: Request, res: Response): Promise<void> => {
     
     // Check if this is a playlist URL
     if (queueManager.isPlaylistUrl(spotifyUri)) {
-        // User submitted a playlist URL - replace fallback playlist
-        logger.info(`User submitted playlist URL: ${spotifyUri}, replacing fallback playlist`);
+        // User submitted a playlist URL - validate it before replacing fallback playlist
+        logger.info(`User submitted playlist URL: ${spotifyUri}, attempting to validate and load`);
         const masterSession = masterUserSessionId ? sessions.get(masterUserSessionId) : null;
         const masterAccessToken = masterSession?.state?.spotify?.access_token;
-        if (masterAccessToken) {
-            await queueManager.loadFallbackPlaylist(spotifyUri, masterAccessToken);
+        
+        if (!masterAccessToken) {
+            logger.warn('No master user token available to validate playlist');
+            res.status(400).json({ error: 'Cannot validate playlist - no master user connected' });
+            return;
         }
-        res.json({ success: true, message: 'Fallback playlist updated' });
+        
+        // Try to load the playlist - this validates that it's readable
+        const success = await queueManager.loadFallbackPlaylist(spotifyUri, masterAccessToken);
+        
+        if (success) {
+            logger.info(`Successfully validated and loaded fallback playlist: ${spotifyUri}`);
+            // Broadcast the updated fallback info to all clients
+            broadcastMode();
+            res.json({ success: true, message: 'Fallback playlist updated' });
+        } else {
+            logger.warn(`Failed to load playlist ${spotifyUri} - it may not be readable or may not exist`);
+            res.status(400).json({ 
+                error: 'Unable to load playlist. Please ensure the playlist exists and is publicly accessible or owned by you.' 
+            });
+        }
         return;
     }
     
