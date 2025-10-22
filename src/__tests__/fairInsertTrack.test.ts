@@ -1,4 +1,4 @@
-import { fairInsertTrack, SubmittedTrack } from '../index';
+import { QueueManager, SubmittedTrack } from '../queueManager';
 
 // Simple test runner
 function runTests() {
@@ -33,50 +33,54 @@ function runTests() {
 
     // Test cases
     test('inserts first track for a user', () => {
-        const queue: SubmittedTrack[] = [];
+        const qm = new QueueManager();
         const track: SubmittedTrack = { spotifyUri: 'uri1', userEmail: 'a@email.com', spotifyName: 'A', timestamp: 1 };
-        fairInsertTrack(track, queue);
-        expect(queue).toEqual([track]);
+        qm.addTrack(track);
+        expect(qm.getSubmittedTracks()).toEqual([track]);
     });
 
     test('alternates between users (round robin)', () => {
-        const queue: SubmittedTrack[] = [
+        const qm = new QueueManager();
+        qm.setSubmittedTracks([
             { spotifyUri: 'uri1', userEmail: 'a@email.com', spotifyName: 'A', timestamp: 1 },
             { spotifyUri: 'uri2', userEmail: 'b@email.com', spotifyName: 'B', timestamp: 2 },
-        ];
+        ]);
         const newTrack: SubmittedTrack = { spotifyUri: 'uri3', userEmail: 'a@email.com', spotifyName: 'A', timestamp: 3 };
-        fairInsertTrack(newTrack, queue);
-        expect(queue.map(t => t.spotifyUri)).toEqual(['uri1', 'uri2', 'uri3']);
+        qm.addTrack(newTrack);
+        expect(qm.getSubmittedTracks().map(t => t.spotifyUri)).toEqual(['uri1', 'uri2', 'uri3']);
     });
 
     test('inserts new user after all others', () => {
-        const queue: SubmittedTrack[] = [
+        const qm = new QueueManager();
+        qm.setSubmittedTracks([
             { spotifyUri: 'uri1', userEmail: 'a@email.com', spotifyName: 'A', timestamp: 1 },
             { spotifyUri: 'uri2', userEmail: 'a@email.com', spotifyName: 'A', timestamp: 2 },
-        ];
+        ]);
         const newTrack: SubmittedTrack = { spotifyUri: 'uri3', userEmail: 'b@email.com', spotifyName: 'B', timestamp: 3 };
-        fairInsertTrack(newTrack, queue);
-        expect(queue.map(t => t.spotifyUri)).toEqual(['uri1', 'uri2', 'uri3']);
+        qm.addTrack(newTrack);
+        expect(qm.getSubmittedTracks().map(t => t.spotifyUri)).toEqual(['uri1', 'uri2', 'uri3']);
     });
 
     test('keeps fairness when one user has more tracks', () => {
-        const queue: SubmittedTrack[] = [
+        const qm = new QueueManager();
+        qm.setSubmittedTracks([
             { spotifyUri: 'uri1', userEmail: 'a@email.com', spotifyName: 'A', timestamp: 1 },
             { spotifyUri: 'uri2', userEmail: 'b@email.com', spotifyName: 'B', timestamp: 2 },
             { spotifyUri: 'uri3', userEmail: 'a@email.com', spotifyName: 'A', timestamp: 3 },
-        ];
+        ]);
         const newTrack: SubmittedTrack = { spotifyUri: 'uri4', userEmail: 'b@email.com', spotifyName: 'B', timestamp: 4 };
-        fairInsertTrack(newTrack, queue);
-        expect(queue.map(t => t.spotifyUri)).toEqual(['uri1', 'uri2', 'uri3', 'uri4']);
+        qm.addTrack(newTrack);
+        expect(qm.getSubmittedTracks().map(t => t.spotifyUri)).toEqual(['uri1', 'uri2', 'uri3', 'uri4']);
     });
 
     test('handles null userEmail gracefully', () => {
-        const queue: SubmittedTrack[] = [
+        const qm = new QueueManager();
+        qm.setSubmittedTracks([
             { spotifyUri: 'uri1', userEmail: null, spotifyName: 'A', timestamp: 1 },
-        ];
+        ]);
         const newTrack: SubmittedTrack = { spotifyUri: 'uri2', userEmail: null, spotifyName: 'A', timestamp: 2 };
-        fairInsertTrack(newTrack, queue);
-        expect(queue.length).toBe(2);
+        qm.addTrack(newTrack);
+        expect(qm.getSubmittedCount()).toBe(2);
     });
 
     console.log(`\nTest Results: ${passed} passed, ${failed} failed`);

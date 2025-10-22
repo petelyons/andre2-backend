@@ -24,6 +24,10 @@ DEBUG=false
 
 # Optional: Comma-separated list of emails that can take master control
 MASTER_CONTROL_EMAILS=admin@example.com,pete@example.com
+
+# Optional: Fallback playlist URL to play when the main queue is empty
+# Default: spotify:playlist:37i9dQZF1DWUoqEG4WY6ce (Spotify's "Lorem" playlist)
+FALLBACK_PLAYLIST_URL=https://open.spotify.com/playlist/your_playlist_id
 ```
 
 ### For Production/Railway Deployment:
@@ -75,6 +79,8 @@ FRONTEND_URL=https://andre2-frontend-production.up.railway.app
 POLL_INTERVAL_MS=1000
 DEBUG=false
 MASTER_CONTROL_EMAILS=admin@example.com
+# Optional - defaults to spotify:playlist:37i9dQZF1DWUoqEG4WY6ce if not set
+FALLBACK_PLAYLIST_URL=https://open.spotify.com/playlist/your_playlist_id
 ```
 
 **Notes:** 

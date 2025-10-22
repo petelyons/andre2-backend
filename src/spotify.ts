@@ -77,6 +77,56 @@ class SpotifyApiDelegate {
             };
         });
     }
+
+    async getPlaylistTracks(token: string, playlistId: string) {
+        this.spotifyApi.setAccessToken(token);
+        const tracks: any[] = [];
+        let offset = 0;
+        const limit = 100;
+        
+        // Fetch all tracks from the playlist (handles pagination)
+        while (true) {
+            const data = await this.spotifyApi.getPlaylistTracks(playlistId, { offset, limit });
+            const items = data.body.items || [];
+            
+            for (const item of items) {
+                if (item.track && item.track.type === 'track') {
+                    tracks.push({
+                        trackId: item.track.id,
+                        spotifyUri: item.track.uri,
+                        name: item.track.name,
+                        artist: item.track.artists.map((a: any) => a.name).join(', '),
+                        album: item.track.album.name,
+                        albumArtUrl: item.track.album.images?.[0]?.url || null
+                    });
+                }
+            }
+            
+            if (items.length < limit) break;
+            offset += limit;
+        }
+        
+        return tracks;
+    }
+
+    extractPlaylistId(url: string): string | null {
+        // Match Spotify playlist URL patterns:
+        // https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M
+        // spotify:playlist:37i9dQZF1DXcBWIGoYBM5M
+        const patterns = [
+            /spotify\.com\/playlist\/([a-zA-Z0-9]+)/,
+            /spotify:playlist:([a-zA-Z0-9]+)/
+        ];
+        
+        for (const pattern of patterns) {
+            const match = url.match(pattern);
+            if (match && match[1]) {
+                return match[1];
+            }
+        }
+        
+        return null;
+    }
 }
 
 const spotifyDelegate = new SpotifyApiDelegate();

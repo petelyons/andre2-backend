@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 import dotenv from 'dotenv';
 import logger from './logger';
 import { createSpotifyRouter, getSpotifyTrackInfo, spotifyDelegate } from './spotify';
+import { QueueManager, SubmittedTrack } from './queueManager';
 import fs from 'fs';
 import path from 'path';
 import http from 'http';
@@ -30,18 +31,18 @@ interface Session {
     state: Record<string, any>;
 }
 
-// New type for submittedTracks
-export interface SubmittedTrack {
-    spotifyUri: string;
-    userEmail: string | null;
-    spotifyName: string | null;
+interface HistoryEvent {
+    type: 'track_added' | 'jam' | 'unjam' | 'airhorn' | 'fallback_play';
     timestamp: number;
-    name?: string;
-    artist?: string;
-    album?: string;
-    albumArtUrl?: string;
-    jammers?: string[];
-    progress?: { position_ms: number; duration_ms: number } | null;
+    userName: string;
+    userEmail: string;
+    details: any;
+}
+
+interface PlayHistoryEntry {
+    timestamp: number;
+    track: any;
+    startedBy?: string;
 }
 
 // Message interfaces for each type
@@ -117,22 +118,6 @@ interface TakeMasterControlMessage {
     sessionId: string;
 }
 
-// Event history
-interface HistoryEvent {
-    type: 'track_added' | 'jam' | 'unjam' | 'airhorn';
-    timestamp: number;
-    userName: string;
-    userEmail: string;
-    details: any;
-}
-
-// Play history
-interface PlayHistoryEntry {
-    timestamp: number;
-    track: any;
-    startedBy?: string;
-}
-
 // Union type for all messages
 type Message = LoginMessage | GenericMessage | PlayTrackMessage | GetTracksMessage | JamMessage | PlayMessage | PauseMessage | SessionPlayMessage | SessionPauseMessage | GetSessionsMessage | RemoveTrackMessage | AirhornMessage | GetPlayHistoryMessage | MasterSkipMessage | TakeMasterControlMessage;
 
@@ -167,8 +152,8 @@ app.use(express.json());
 const sessions = new Map<string, Session>();
 const sessionCleanupTimers = new Map<string, NodeJS.Timeout>();
 
-// Store all submitted tracks in chronological order
-const submittedTracks: SubmittedTrack[] = [];
+// Queue manager handles all track queuing logic
+const queueManager = new QueueManager(process.env.FALLBACK_PLAYLIST_URL);
 
 // Global playback mode state
 let mode: 'master_play' | 'master_pause' = 'master_pause';
@@ -214,7 +199,7 @@ const TRACKS_FILE = path.join(__dirname, 'tracks.json');
 const SESSIONS_FILE = path.join(__dirname, 'sessions.json');
 function saveTracksToFile() {
     try {
-        fs.writeFileSync(TRACKS_FILE, JSON.stringify(submittedTracks, null, 2));
+        fs.writeFileSync(TRACKS_FILE, JSON.stringify(queueManager.getSubmittedTracks(), null, 2));
     } catch (err) {
         logger.error('Failed to save tracks to file:', err);
     }
@@ -225,7 +210,7 @@ function loadTracksFromFile() {
             const data = fs.readFileSync(TRACKS_FILE, 'utf-8');
             const arr = JSON.parse(data);
             if (Array.isArray(arr)) {
-                submittedTracks.length = 0;
+                const loadedTracks: SubmittedTrack[] = [];
                 for (const t of arr) {
                     // Migration: convert sessionId to userEmail if needed
                     if (t.sessionId && !t.userEmail) {
@@ -247,8 +232,9 @@ function loadTracksFromFile() {
                             delete t.sessionId;
                         }
                     }
-                    submittedTracks.push(t);
+                    loadedTracks.push(t);
                 }
+                queueManager.setSubmittedTracks(loadedTracks);
                 // Save the migrated tracks back to file
                 if (arr.some(t => t.sessionId)) {
                     saveTracksToFile();
@@ -263,7 +249,7 @@ function loadTracksFromFile() {
 
 // Helper to broadcast the full track list to all connected clients
 function broadcastTrackList() {
-    const trackList = submittedTracks.map(t => ({
+    const trackList = queueManager.getSubmittedTracks().map(t => ({
         spotifyUri: t.spotifyUri,
         userEmail: t.userEmail,
         spotifyName: t.spotifyName,
@@ -485,12 +471,44 @@ async function pollMasterUserPlayback() {
         // If detected, advance to next track
         if (detectedTrackEnd) {
             logger.info('Advancing to next track due to detected end.');
-            if (submittedTracks.length > 0) {
-                currentlyPlayingTrack = submittedTracks.shift()!;
-                saveTracksToFile();
-                logger.info(`Now playing: ${currentlyPlayingTrack.name || currentlyPlayingTrack.spotifyUri}`);
-                masterTrackStarted = false; // Reset flag for new track
-                lastTrackChangeCommand = Date.now(); // Mark that we commanded a track change
+            
+            // Before changing currentlyPlayingTrack, push to playHistory
+            if (currentlyPlayingTrack) {
+                playHistory.push({
+                    timestamp: Date.now(),
+                    track: { ...currentlyPlayingTrack },
+                    startedBy: masterUserSessionId ? (sessions.get(masterUserSessionId)?.state?.spotify?.name || sessions.get(masterUserSessionId)?.state?.listener?.name || '') : undefined
+                });
+                broadcastPlayHistory();
+            }
+            
+            // Get master user's access token for fallback playlist loading
+            const masterAccessToken = masterSession?.state?.spotify?.access_token;
+            const nextTrackInfo = await queueManager.getNextTrack(masterAccessToken);
+            
+            if (nextTrackInfo) {
+                const newTrack = nextTrackInfo.track;
+                currentlyPlayingTrack = newTrack;
+                if (!nextTrackInfo.isFallback) {
+                    saveTracksToFile();
+                    logger.info(`Now playing: ${newTrack.name || newTrack.spotifyUri}`);
+                } else {
+                    logger.info(`Playing from fallback queue: ${newTrack.name || newTrack.spotifyUri}`);
+                    
+                    // Record fallback play in history
+                    history.push({
+                        type: 'fallback_play',
+                        timestamp: Date.now(),
+                        userName: 'System',
+                        userEmail: 'fallback@system',
+                        details: { track: newTrack.name || newTrack.spotifyUri }
+                    });
+                    broadcastHistory();
+                }
+                
+                masterTrackStarted = false;
+                lastTrackChangeCommand = Date.now();
+                
                 // Play the new track for all sessions with session_play mode
                 for (const [sid, sess] of sessions.entries()) {
                     const sessionMode = sessionModes.get(sid);
@@ -498,7 +516,7 @@ async function pollMasterUserPlayback() {
                         const accessToken = sess.state?.spotify?.access_token;
                         if (accessToken) {
                             try {
-                                await spotifyDelegate.play(accessToken, { uris: [currentlyPlayingTrack.spotifyUri] });
+                                await spotifyDelegate.play(accessToken, { uris: [newTrack.spotifyUri] });
                                 logger.info(`Auto-started playback for session ${sid} (session_play mode)`);
                             } catch (err) {
                                 logger.error(`Failed to auto-start playback for session ${sid}:`, err);
@@ -510,6 +528,7 @@ async function pollMasterUserPlayback() {
                         }
                     }
                 }
+                
                 broadcastTrackList();
                 broadcastMode();
             } else {
@@ -517,19 +536,10 @@ async function pollMasterUserPlayback() {
                 masterTrackStarted = false;
                 if (mode !== 'master_pause') {
                     mode = 'master_pause';
-                    logger.info('No more tracks in queue, stopping playback');
+                    logger.info('No more tracks in queue and no fallback playlist, stopping playback');
                     broadcastTrackList();
                     broadcastMode();
                 }
-            }
-            // Before changing currentlyPlayingTrack, push to playHistory
-            if (currentlyPlayingTrack) {
-                playHistory.push({
-                    timestamp: Date.now(),
-                    track: { ...currentlyPlayingTrack },
-                    startedBy: masterUserSessionId ? (sessions.get(masterUserSessionId)?.state?.spotify?.name || sessions.get(masterUserSessionId)?.state?.listener?.name || '') : undefined
-                });
-                broadcastPlayHistory();
             }
             return; // Skip the rest of the function for this poll
         }
@@ -556,7 +566,7 @@ async function pollMasterUserPlayback() {
             // AND: Don't correct if we just commanded a track change (grace period for Spotify to respond)
             if (currentlyPlayingTrack && curr.uri) {
                 const masterTrackUri = curr.uri;
-                const isTrackInQueue = submittedTracks.some(t => t.spotifyUri === masterTrackUri);
+                const isTrackInQueue = queueManager.getSubmittedTracks().some(t => t.spotifyUri === masterTrackUri);
                 const timeSinceLastCommand = Date.now() - lastTrackChangeCommand;
                 const inGracePeriod = timeSinceLastCommand < TRACK_CHANGE_GRACE_PERIOD_MS;
                 
@@ -568,7 +578,7 @@ async function pollMasterUserPlayback() {
                         // Master has naturally advanced to a track in our queue - update our state to match
                         logger.info(`Master naturally advanced to ${masterTrackUri} which is in queue. Syncing state...`);
                         // Find and set as current, remove from queue
-                        const queueIndex = submittedTracks.findIndex(t => t.spotifyUri === masterTrackUri);
+                        const queueIndex = queueManager.getSubmittedTracks().findIndex(t => t.spotifyUri === masterTrackUri);
                         if (queueIndex !== -1) {
                             // Add old track to play history
                             if (currentlyPlayingTrack) {
@@ -579,7 +589,7 @@ async function pollMasterUserPlayback() {
                                 });
                             }
                             // Set new current track
-                            currentlyPlayingTrack = submittedTracks.splice(queueIndex, 1)[0];
+                            currentlyPlayingTrack = queueManager.getSubmittedTracks().splice(queueIndex, 1)[0];
                             masterTrackStarted = true;
                             saveTracksToFile();
                             broadcastTrackList();
@@ -631,13 +641,42 @@ async function pollMasterUserPlayback() {
                 if (progressPercentage >= 1.0) {
                     logger.info(`Track "${currentlyPlayingTrack.name}" has finished playing, moving to next track`);
                     
-                    // Pop next track from queue
-                    if (submittedTracks.length > 0) {
-                        currentlyPlayingTrack = submittedTracks.shift()!;
-                        saveTracksToFile();
-                        logger.info(`Now playing: ${currentlyPlayingTrack.name || currentlyPlayingTrack.spotifyUri}`);
-                        masterTrackStarted = false; // Reset flag for new track
-                        lastTrackChangeCommand = Date.now(); // Mark that we commanded a track change
+                    // Before changing currentlyPlayingTrack, push to playHistory
+                    if (currentlyPlayingTrack) {
+                        playHistory.push({
+                            timestamp: Date.now(),
+                            track: { ...currentlyPlayingTrack },
+                            startedBy: masterUserSessionId ? (sessions.get(masterUserSessionId)?.state?.spotify?.name || sessions.get(masterUserSessionId)?.state?.listener?.name || '') : undefined
+                        });
+                        broadcastPlayHistory();
+                    }
+                    
+                    // Get master user's access token for fallback playlist loading
+                    const masterAccessToken = masterSession?.state?.spotify?.access_token;
+                    const nextTrackInfo = await queueManager.getNextTrack(masterAccessToken);
+                    
+                    if (nextTrackInfo) {
+                        const newTrack = nextTrackInfo.track;
+                        currentlyPlayingTrack = newTrack;
+                        if (!nextTrackInfo.isFallback) {
+                            saveTracksToFile();
+                            logger.info(`Now playing: ${newTrack.name || newTrack.spotifyUri}`);
+                        } else {
+                            logger.info(`Playing from fallback queue: ${newTrack.name || newTrack.spotifyUri}`);
+                            
+                            // Record fallback play in history
+                            history.push({
+                                type: 'fallback_play',
+                                timestamp: Date.now(),
+                                userName: 'System',
+                                userEmail: 'fallback@system',
+                                details: { track: newTrack.name || newTrack.spotifyUri }
+                            });
+                            broadcastHistory();
+                        }
+                        
+                        masterTrackStarted = false;
+                        lastTrackChangeCommand = Date.now();
                         
                         // Play the new track for all sessions with session_play mode
                         for (const [sid, sess] of sessions.entries()) {
@@ -646,7 +685,7 @@ async function pollMasterUserPlayback() {
                                 const accessToken = sess.state?.spotify?.access_token;
                                 if (accessToken) {
                                     try {
-                                        await spotifyDelegate.play(accessToken, { uris: [currentlyPlayingTrack.spotifyUri] });
+                                        await spotifyDelegate.play(accessToken, { uris: [newTrack.spotifyUri] });
                                         logger.info(`Auto-started playback for session ${sid} (session_play mode)`);
                                     } catch (err) {
                                         logger.error(`Failed to auto-start playback for session ${sid}:`, err);
@@ -659,28 +698,18 @@ async function pollMasterUserPlayback() {
                             }
                         }
                         
-                        // Broadcast updated track list and mode
                         broadcastTrackList();
                         broadcastMode();
                     } else {
-                        // No more tracks in queue
+                        // No more tracks in queue and no fallback
                         currentlyPlayingTrack = null;
                         masterTrackStarted = false;
                         if (mode !== 'master_pause') {
                             mode = 'master_pause';
-                            logger.info('No more tracks in queue, stopping playback');
+                            logger.info('No more tracks in queue and no fallback playlist, stopping playback');
                             broadcastTrackList();
                             broadcastMode();
                         }
-                    }
-                    // Before changing currentlyPlayingTrack, push to playHistory
-                    if (currentlyPlayingTrack) {
-                        playHistory.push({
-                            timestamp: Date.now(),
-                            track: { ...currentlyPlayingTrack },
-                            startedBy: masterUserSessionId ? (sessions.get(masterUserSessionId)?.state?.spotify?.name || sessions.get(masterUserSessionId)?.state?.listener?.name || '') : undefined
-                        });
-                        broadcastPlayHistory();
                     }
                 }
             }
@@ -822,7 +851,7 @@ function startWebSocketServer(server: http.Server): void {
                             // Send initial state
                             ws.send(JSON.stringify({
                                 type: 'tracks_list',
-                                tracks: submittedTracks.map(t => ({
+                                tracks: queueManager.getSubmittedTracks().map(t => ({
                                     spotifyUri: t.spotifyUri,
                                     userEmail: t.userEmail,
                                     spotifyName: t.spotifyName,
@@ -847,7 +876,7 @@ function startWebSocketServer(server: http.Server): void {
                             // Respond with the current track list
                             ws.send(JSON.stringify({
                                 type: 'tracks_list',
-                                tracks: submittedTracks.map(t => ({
+                                tracks: queueManager.getSubmittedTracks().map(t => ({
                                     spotifyUri: t.spotifyUri,
                                     userEmail: t.userEmail,
                                     spotifyName: t.spotifyName,
@@ -898,9 +927,8 @@ function startWebSocketServer(server: http.Server): void {
                         case 'remove_track':
                             // Remove track from the queue
                             if (message.spotifyUri && message.sessionId) {
-                                const trackIndex = submittedTracks.findIndex(t => t.spotifyUri === message.spotifyUri);
-                                if (trackIndex !== -1) {
-                                    const removedTrack = submittedTracks.splice(trackIndex, 1)[0];
+                                const removedTrack = queueManager.removeTrack(message.spotifyUri);
+                                if (removedTrack) {
                                     saveTracksToFile();
                                     const removerSession = sessions.get(message.sessionId);
                                     const removerName = removerSession?.state?.spotify?.name || 'Unknown User';
@@ -922,7 +950,7 @@ function startWebSocketServer(server: http.Server): void {
                                 const jammerEmail = jammerSession?.state?.spotify?.email || jammerSession?.state?.listener?.email || '';
                                 if (!jammerEmail) return; // Don't allow jam if no email
                                 // Update in queue
-                                const track = submittedTracks.find(t => t.spotifyUri === message.spotifyUri);
+                                const track = queueManager.getSubmittedTracks().find(t => t.spotifyUri === message.spotifyUri);
                                 let jammed = false;
                                 if (track) {
                                     if (!Array.isArray(track.jammers)) track.jammers = [];
@@ -984,11 +1012,19 @@ function startWebSocketServer(server: http.Server): void {
                                 mode = 'master_play';
                                 logger.info('Playback mode set to master_play');
                                 // If no currently playing track, pop the first from the queue
-                                if (!currentlyPlayingTrack && submittedTracks.length > 0) {
-                                    currentlyPlayingTrack = submittedTracks.shift()!;
-                                    saveTracksToFile();
-                                    logger.info(`Now playing: ${currentlyPlayingTrack.name || currentlyPlayingTrack.spotifyUri}`);
-                                    broadcastTrackList();
+                                if (!currentlyPlayingTrack && queueManager.getSubmittedCount() > 0) {
+                                    const masterSession = masterUserSessionId ? sessions.get(masterUserSessionId) : null;
+                                    const masterAccessToken = masterSession?.state?.spotify?.access_token;
+                                    const nextTrackInfo = await queueManager.getNextTrack(masterAccessToken);
+                                    if (nextTrackInfo) {
+                                        const newTrack = nextTrackInfo.track;
+                                        currentlyPlayingTrack = newTrack;
+                                        if (!nextTrackInfo.isFallback) {
+                                            saveTracksToFile();
+                                        }
+                                        logger.info(`Now playing: ${newTrack.name || newTrack.spotifyUri}`);
+                                        broadcastTrackList();
+                                    }
                                 }
                                 // Play/resume the current track on Spotify for each session
                                 if (currentlyPlayingTrack && currentlyPlayingTrack.spotifyUri) {
@@ -1110,11 +1146,35 @@ function startWebSocketServer(server: http.Server): void {
                                     });
                                     broadcastPlayHistory();
                                 }
-                                if (submittedTracks.length > 0) {
-                                    currentlyPlayingTrack = submittedTracks.shift()!;
-                                    saveTracksToFile();
+                                
+                                // Get master user's access token for fallback playlist loading
+                                const masterSession = masterUserSessionId ? sessions.get(masterUserSessionId) : null;
+                                const masterAccessToken = masterSession?.state?.spotify?.access_token;
+                                const nextTrackInfo = await queueManager.getNextTrack(masterAccessToken);
+                                
+                                if (nextTrackInfo) {
+                                    const newTrack = nextTrackInfo.track;
+                                    currentlyPlayingTrack = newTrack;
+                                    if (!nextTrackInfo.isFallback) {
+                                        saveTracksToFile();
+                                        logger.info(`Skipped to: ${newTrack.name || newTrack.spotifyUri}`);
+                                    } else {
+                                        logger.info(`Skipped to fallback queue: ${newTrack.name || newTrack.spotifyUri}`);
+                                        
+                                        // Record fallback play in history
+                                        history.push({
+                                            type: 'fallback_play',
+                                            timestamp: Date.now(),
+                                            userName: 'System',
+                                            userEmail: 'fallback@system',
+                                            details: { track: newTrack.name || newTrack.spotifyUri }
+                                        });
+                                        broadcastHistory();
+                                    }
+                                    
                                     masterTrackStarted = false;
-                                    lastTrackChangeCommand = Date.now(); // Mark that we commanded a track change
+                                    lastTrackChangeCommand = Date.now();
+                                    
                                     // Play the new track for all sessions with session_play mode
                                     for (const [sid, sess] of sessions.entries()) {
                                         const sessionMode = sessionModes.get(sid);
@@ -1122,13 +1182,14 @@ function startWebSocketServer(server: http.Server): void {
                                             const accessToken = sess.state?.spotify?.access_token;
                                             if (accessToken) {
                                                 try {
-                                                    await spotifyDelegate.play(accessToken, { uris: [currentlyPlayingTrack.spotifyUri] });
+                                                    await spotifyDelegate.play(accessToken, { uris: [newTrack.spotifyUri] });
                                                 } catch (err) {
                                                     logger.error(`Failed to auto-start playback for session ${sid}:`, err);
                                                 }
                                             }
                                         }
                                     }
+                                    
                                     broadcastTrackList();
                                     broadcastMode();
                                 } else {
@@ -1222,8 +1283,22 @@ app.post('/api/tracks', async (req: Request, res: Response): Promise<void> => {
         res.status(400).json({ error: 'Spotify URI and sessionId are required' });
         return;
     }
+    
+    // Check if this is a playlist URL
+    if (queueManager.isPlaylistUrl(spotifyUri)) {
+        // User submitted a playlist URL - replace fallback playlist
+        logger.info(`User submitted playlist URL: ${spotifyUri}, replacing fallback playlist`);
+        const masterSession = masterUserSessionId ? sessions.get(masterUserSessionId) : null;
+        const masterAccessToken = masterSession?.state?.spotify?.access_token;
+        if (masterAccessToken) {
+            await queueManager.loadFallbackPlaylist(spotifyUri, masterAccessToken);
+        }
+        res.json({ success: true, message: 'Fallback playlist updated' });
+        return;
+    }
+    
     // Prevent duplicate tracks
-    if (submittedTracks.some(t => t.spotifyUri === spotifyUri)) {
+    if (queueManager.hasTrack(spotifyUri)) {
         logger.info(`Track ${spotifyUri} already exists, not adding duplicate.`);
         res.json({ success: true });
         return;
@@ -1258,7 +1333,7 @@ app.post('/api/tracks', async (req: Request, res: Response): Promise<void> => {
         submitterEmail = session.state.listener.email || '';
     }
     logger.info(`Track submitted: ${spotifyUri} by session ${sessionId} (${submitterName})`);
-    fairInsertTrack({ spotifyUri, userEmail: submitterEmail, spotifyName: submitterName, timestamp: Date.now(), ...trackInfo }, submittedTracks);
+    queueManager.addTrack({ spotifyUri, userEmail: submitterEmail, spotifyName: submitterName, timestamp: Date.now(), ...trackInfo });
     saveTracksToFile();
     history.push({
         type: 'track_added',
@@ -1413,8 +1488,8 @@ async function masterRandomLikedHandler(req: Request, res: Response) {
         const tracks = await spotifyDelegate.getRandomLikedTracks(accessToken, 10);
         for (const track of tracks) {
             // Prevent duplicates
-            if (submittedTracks.some(t => t.spotifyUri === track.spotifyUri)) continue;
-            submittedTracks.push({
+            if (queueManager.hasTrack(track.spotifyUri)) continue;
+            queueManager.addTrack({
                 spotifyUri: track.spotifyUri,
                 userEmail: session?.state?.spotify?.email || '',
                 spotifyName: spotifyName || '',
@@ -1555,7 +1630,7 @@ app.get('/api/debug/health', (req: Request, res: Response) => {
             details: activeSessions,
         },
         tracks: {
-            total: submittedTracks.length,
+            total: queueManager.getSubmittedCount(),
             currentlyPlaying: currentlyPlayingTrack ? {
                 name: currentlyPlayingTrack.name,
                 artist: currentlyPlayingTrack.artist,
@@ -1600,6 +1675,19 @@ function formatUptime(seconds: number): string {
   await loadSessionsFromFile();
   loadTracksFromFile();
   cleanupInvalidSessions();
+  
+  // Load fallback playlist if configured
+  if (queueManager.getFallbackPlaylistUrl()) {
+    logger.info('Loading fallback playlist on startup');
+    // Try to find a master user token, otherwise it will be loaded later
+    const masterSession = masterUserSessionId ? sessions.get(masterUserSessionId) : null;
+    const masterAccessToken = masterSession?.state?.spotify?.access_token;
+    if (masterAccessToken) {
+      await queueManager.loadFallbackPlaylist(queueManager.getFallbackPlaylistUrl(), masterAccessToken);
+    } else {
+      logger.info('No master user token available yet, fallback playlist will load when master user connects');
+    }
+  }
   
   const httpServer = http.createServer(app);
   
@@ -1686,51 +1774,6 @@ async function loadSessionsFromFile() {
     }
 } 
 
-// Helper to fairly insert a track into the queue
-function fairInsertTrack(track: SubmittedTrack, queue: SubmittedTrack[]) {
-    // Count tracks per user
-    const userCounts: Record<string, number> = {};
-    for (const t of queue) {
-        if (!t.userEmail) continue;
-        userCounts[t.userEmail] = (userCounts[t.userEmail] || 0) + 1;
-    }
-    const thisUser = track.userEmail;
-    const thisUserCount = thisUser ? (userCounts[thisUser] || 0) : 0;
-    // Find the minimum count among all users (excluding this user if they have 0)
-    let minCount = Infinity;
-    for (const sid in userCounts) {
-        if (sid !== thisUser && userCounts[sid] < minCount) {
-            minCount = userCounts[sid];
-        }
-    }
-    if (minCount === Infinity) minCount = 0;
-    // Find the last index where this user has a track
-    let lastUserIdx = -1;
-    let userSeen = 0;
-    for (let i = 0; i < queue.length; ++i) {
-        if (queue[i].userEmail === thisUser) {
-            userSeen++;
-            if (userSeen === thisUserCount) {
-                lastUserIdx = i;
-            }
-        }
-    }
-    // Find the first index after all tracks from users with fewer tracks
-    let insertIdx = queue.length;
-    if (thisUserCount > minCount) {
-        // Find the last index where a user with minCount tracks appears
-        const counts: Record<string, number> = { ...userCounts };
-        for (let i = 0; i < queue.length; ++i) {
-            const sid = queue[i].userEmail;
-            if (sid && counts[sid] === minCount) {
-                insertIdx = i + 1;
-            }
-        }
-    }
-    // Insert after the last track from this user, but not before insertIdx
-    const finalIdx = Math.max(lastUserIdx + 1, insertIdx);
-    queue.splice(finalIdx, 0, track);
-} 
 
 // Log all configured values at startup
 logger.info('Configured values:');
@@ -1739,6 +1782,5 @@ logger.info(`  WebSocket path: /websocket`);
 logger.info(`  POLL_INTERVAL_MS: ${POLL_INTERVAL_MS}`);
 logger.info(`  DEBUG: ${DEBUG}`);
 logger.info(`  Tracks file: ${TRACKS_FILE}`);
-logger.info(`  Sessions file: ${SESSIONS_FILE}`); 
-
-export { fairInsertTrack }; 
+logger.info(`  Sessions file: ${SESSIONS_FILE}`);
+logger.info(`  Fallback playlist URL: ${queueManager.getFallbackPlaylistUrl() || 'not configured'}`); 
