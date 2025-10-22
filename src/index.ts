@@ -291,6 +291,7 @@ function broadcastMode() {
             currentlyPlayingTrack,
             masterUserSessionId,
             canTakeMasterControl: canTakeControl,
+            fallbackPlaylist: queueManager.getFallbackInfo(),
         }));
     }
 }
@@ -391,6 +392,14 @@ async function assignMasterUserIfNeeded() {
                 } catch (err) {
                     logger.warn('Could not fetch master user playback state on assignment:', err);
                 }
+                
+                // Load fallback playlist if not already loaded
+                if (queueManager.getFallbackPlaylistUrl() && queueManager.getFallbackCount() === 0) {
+                    logger.info('Master user assigned, loading fallback playlist');
+                    const accessToken = session.state.spotify.access_token;
+                    await queueManager.loadFallbackPlaylist(queueManager.getFallbackPlaylistUrl(), accessToken);
+                }
+                
                 break;
             }
         }
@@ -867,6 +876,7 @@ function startWebSocketServer(server: http.Server): void {
                                 mode,
                                 currentlyPlayingTrack,
                                 masterUserSessionId,
+                                fallbackPlaylist: queueManager.getFallbackInfo(),
                             }));
                             if (sessionId) sendSessionMode(sessionId);
                             broadcastSessionList();

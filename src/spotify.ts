@@ -109,6 +109,19 @@ class SpotifyApiDelegate {
         return tracks;
     }
 
+    async getPlaylistInfo(token: string, playlistId: string) {
+        this.spotifyApi.setAccessToken(token);
+        const data = await this.spotifyApi.getPlaylist(playlistId);
+        return {
+            id: data.body.id,
+            name: data.body.name,
+            description: data.body.description,
+            owner: data.body.owner.display_name,
+            trackCount: data.body.tracks.total,
+            imageUrl: data.body.images?.[0]?.url || null
+        };
+    }
+
     extractPlaylistId(url: string): string | null {
         // Match Spotify playlist URL patterns:
         // https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M

@@ -24,6 +24,7 @@ export class QueueManager {
     private submittedTracks: SubmittedTrack[] = [];
     private fallbackQueue: SubmittedTrack[] = [];
     private currentFallbackPlaylistUrl: string = '';
+    private currentFallbackPlaylistName: string = '';
 
     constructor(initialFallbackUrl?: string) {
         this.currentFallbackPlaylistUrl = initialFallbackUrl || DEFAULT_FALLBACK_PLAYLIST;
@@ -34,6 +35,27 @@ export class QueueManager {
      */
     getFallbackPlaylistUrl(): string {
         return this.currentFallbackPlaylistUrl;
+    }
+
+    /**
+     * Get the current fallback playlist name
+     */
+    getFallbackPlaylistName(): string {
+        return this.currentFallbackPlaylistName;
+    }
+
+    /**
+     * Get fallback playlist info for broadcasting to clients
+     */
+    getFallbackInfo(): { url: string; name: string; trackCount: number } | null {
+        if (!this.currentFallbackPlaylistUrl) {
+            return null;
+        }
+        return {
+            url: this.currentFallbackPlaylistUrl,
+            name: this.currentFallbackPlaylistName || 'Fallback Playlist',
+            trackCount: this.fallbackQueue.length
+        };
     }
 
     /**
@@ -113,6 +135,17 @@ export class QueueManager {
             return { track, isFallback: true };
         }
 
+        // No tracks available - try to load fallback if not loaded yet
+        if (this.fallbackQueue.length === 0 && this.currentFallbackPlaylistUrl && accessToken) {
+            logger.info('No tracks in fallback queue, attempting to load from playlist');
+            const success = await this.loadFallbackPlaylist(this.currentFallbackPlaylistUrl, accessToken);
+            if (success && this.fallbackQueue.length > 0) {
+                const track = this.fallbackQueue.shift()!;
+                return { track, isFallback: true };
+            }
+        }
+
+        logger.info(`No tracks available. Fallback queue: ${this.fallbackQueue.length}, Fallback URL: ${this.currentFallbackPlaylistUrl}, Has token: ${!!accessToken}`);
         return null;
     }
 
@@ -138,7 +171,12 @@ export class QueueManager {
 
         try {
             logger.info(`Loading fallback playlist: ${playlistUrl} (ID: ${playlistId})`);
-            const tracks = await spotifyDelegate.getPlaylistTracks(accessToken, playlistId);
+            
+            // Fetch playlist info and tracks
+            const [playlistInfo, tracks] = await Promise.all([
+                spotifyDelegate.getPlaylistInfo(accessToken, playlistId),
+                spotifyDelegate.getPlaylistTracks(accessToken, playlistId)
+            ]);
 
             // Clear existing fallback queue and populate with new tracks
             this.fallbackQueue.length = 0;
@@ -155,8 +193,9 @@ export class QueueManager {
                 });
             }
 
-            logger.info(`Loaded ${this.fallbackQueue.length} tracks from fallback playlist`);
             this.currentFallbackPlaylistUrl = playlistUrl;
+            this.currentFallbackPlaylistName = playlistInfo.name;
+            logger.info(`Loaded ${this.fallbackQueue.length} tracks from fallback playlist "${playlistInfo.name}"`);
             return true;
         } catch (err) {
             logger.error('Failed to load fallback playlist:', err);
