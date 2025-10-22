@@ -112,6 +112,11 @@ interface MasterSkipMessage {
     sessionId: string;
 }
 
+interface TakeMasterControlMessage {
+    type: 'take_master_control';
+    sessionId: string;
+}
+
 // Event history
 interface HistoryEvent {
     type: 'track_added' | 'jam' | 'unjam' | 'airhorn';
@@ -129,7 +134,7 @@ interface PlayHistoryEntry {
 }
 
 // Union type for all messages
-type Message = LoginMessage | GenericMessage | PlayTrackMessage | GetTracksMessage | JamMessage | PlayMessage | PauseMessage | SessionPlayMessage | SessionPauseMessage | GetSessionsMessage | RemoveTrackMessage | AirhornMessage | GetPlayHistoryMessage | MasterSkipMessage;
+type Message = LoginMessage | GenericMessage | PlayTrackMessage | GetTracksMessage | JamMessage | PlayMessage | PauseMessage | SessionPlayMessage | SessionPauseMessage | GetSessionsMessage | RemoveTrackMessage | AirhornMessage | GetPlayHistoryMessage | MasterSkipMessage | TakeMasterControlMessage;
 
 // Middleware
 // CORS configuration - must be before other middleware
@@ -292,11 +297,14 @@ function broadcastTrackList() {
 function broadcastMode() {
     for (const [sessionId, session] of sessions.entries()) {
         if (!session.ws || session.ws.readyState !== 1) continue;
+        const userEmail = session.state?.spotify?.email || session.state?.listener?.email;
+        const canTakeControl = canTakeMasterControl(userEmail);
         session.ws && session.ws.send(JSON.stringify({
             type: 'mode',
             mode,
             currentlyPlayingTrack,
             masterUserSessionId,
+            canTakeMasterControl: canTakeControl,
         }));
     }
 }
@@ -417,6 +425,16 @@ function notifyUserToActivateDevice(sessionId: string) {
 // Debug mode flag
 const DEBUG = process.env.DEBUG === '1' || process.env.DEBUG === 'true';
 function isDebug() { return DEBUG; }
+
+// Master control backdoor - comma-separated list of emails
+const MASTER_CONTROL_EMAILS = process.env.MASTER_CONTROL_EMAILS 
+    ? process.env.MASTER_CONTROL_EMAILS.split(',').map(e => e.trim().toLowerCase())
+    : [];
+
+function canTakeMasterControl(email: string | undefined): boolean {
+    if (!email) return false;
+    return MASTER_CONTROL_EMAILS.includes(email.toLowerCase());
+}
 
 // Poll master user's playback state
 async function pollMasterUserPlayback() {
@@ -1121,6 +1139,33 @@ function startWebSocketServer(server: http.Server): void {
                                         broadcastTrackList();
                                         broadcastMode();
                                     }
+                                }
+                            }
+                            break;
+                        case 'take_master_control':
+                            if (message.sessionId) {
+                                const takingSession = sessions.get(message.sessionId);
+                                const userEmail = takingSession?.state?.spotify?.email;
+                                const userName = takingSession?.state?.spotify?.name;
+                                
+                                if (canTakeMasterControl(userEmail) && takingSession?.state?.spotify?.access_token) {
+                                    const oldMasterId = masterUserSessionId;
+                                    const oldMasterSession = oldMasterId ? sessions.get(oldMasterId) : null;
+                                    const oldMasterName = oldMasterSession?.state?.spotify?.name || oldMasterSession?.state?.listener?.name || 'Unknown';
+                                    
+                                    masterUserSessionId = message.sessionId;
+                                    logger.info(`Master control taken by ${userName} (${userEmail}) from ${oldMasterName}`);
+                                    
+                                    // If there's a current track and master_play mode, start polling
+                                    if (mode === 'master_play') {
+                                        stopPolling(); // Stop old polling
+                                        startPolling(); // Start new polling for new master
+                                    }
+                                    
+                                    broadcastSessionList();
+                                    broadcastMode();
+                                } else {
+                                    logger.warn(`Unauthorized attempt to take master control by ${userName} (${userEmail})`);
                                 }
                             }
                             break;

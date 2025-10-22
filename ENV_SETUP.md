@@ -21,6 +21,9 @@ POLL_INTERVAL_MS=1000
 
 # Optional: Debug mode (default: false)
 DEBUG=false
+
+# Optional: Comma-separated list of emails that can take master control
+MASTER_CONTROL_EMAILS=admin@example.com,pete@example.com
 ```
 
 ### For Production/Railway Deployment:
@@ -71,9 +74,12 @@ SPOTIFY_REDIRECT_URI=https://andre2-backend-production.up.railway.app/api/spotif
 FRONTEND_URL=https://andre2-frontend-production.up.railway.app
 POLL_INTERVAL_MS=1000
 DEBUG=false
+MASTER_CONTROL_EMAILS=admin@example.com
 ```
 
-**Note:** Do NOT set `PORT` - Railway assigns this automatically.
+**Notes:** 
+- Do NOT set `PORT` - Railway assigns this automatically
+- `MASTER_CONTROL_EMAILS` is optional - only set if you want to allow specific users to take master control
 
 ### Step 3: Frontend Environment Variables
 In Railway dashboard → Frontend Service → Variables:
