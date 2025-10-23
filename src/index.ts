@@ -29,6 +29,7 @@ interface Session {
     ws: WebSocket | null;
     userId: string | null;
     state: Record<string, any>;
+    lastHeartbeat: number;
 }
 
 interface HistoryEvent {
@@ -135,8 +136,13 @@ interface HistoryMessageMessage {
     sessionId: string;
 }
 
+interface PingMessage {
+    type: 'ping';
+    sessionId: string;
+}
+
 // Union type for all messages
-type Message = LoginMessage | GenericMessage | PlayTrackMessage | GetTracksMessage | JamMessage | PlayMessage | PauseMessage | SessionPlayMessage | SessionPauseMessage | GetSessionsMessage | RemoveTrackMessage | DelayTrackMessage | AirhornMessage | GetPlayHistoryMessage | MasterSkipMessage | StartFallbackMessage | TakeMasterControlMessage | HistoryMessageMessage;
+type Message = LoginMessage | GenericMessage | PlayTrackMessage | GetTracksMessage | JamMessage | PlayMessage | PauseMessage | SessionPlayMessage | SessionPauseMessage | GetSessionsMessage | RemoveTrackMessage | DelayTrackMessage | AirhornMessage | GetPlayHistoryMessage | MasterSkipMessage | StartFallbackMessage | TakeMasterControlMessage | HistoryMessageMessage | PingMessage;
 
 // Middleware
 // CORS configuration - must be before other middleware
@@ -959,12 +965,13 @@ function startWebSocketServer(server: http.Server): void {
                             if (sessionId && sessions.has(sessionId)) {
                                 session = sessions.get(sessionId)!;
                                 session.ws = ws;
+                                session.lastHeartbeat = Date.now(); // Update heartbeat on reconnect
                                 logger.info(`Reusing existing session: ${sessionId}`, {
                                     hasSpotify: !!session.state?.spotify,
                                     hasListener: !!session.state?.listener,
                                 });
                             } else if (sessionId) {
-                                session = { ws, userId: sessionId, state: {} };
+                                session = { ws, userId: sessionId, state: {}, lastHeartbeat: Date.now() };
                                 sessions.set(sessionId, session);
                                 logger.warn(`Created new empty session (should not happen): ${sessionId}`);
                             }
@@ -1534,6 +1541,19 @@ function startWebSocketServer(server: http.Server): void {
                                 logger.info(`History message posted by ${userName}: ${message.message}`);
                             }
                             break;
+                        case 'ping':
+                            // Update last heartbeat timestamp
+                            if (message.sessionId) {
+                                const session = sessions.get(message.sessionId);
+                                if (session) {
+                                    session.lastHeartbeat = Date.now();
+                                    // Send pong response
+                                    if (session.ws && session.ws.readyState === 1) {
+                                        session.ws.send(JSON.stringify({ type: 'pong' }));
+                                    }
+                                }
+                            }
+                            break;
                     }
                 } catch (error) {
                     logger.error('Error processing message:', error);
@@ -1543,36 +1563,13 @@ function startWebSocketServer(server: http.Server): void {
             // Handle disconnection
             ws.on('close', () => {
                 if (sessionId) {
-                    logger.info(`Session ${sessionId} disconnected, removing immediately.`);
-                    
-                    // Add disconnection event to history
-                    const disconnectedSession = sessions.get(sessionId);
-                    if (disconnectedSession) {
-                        const userName = disconnectedSession.state?.spotify?.name || disconnectedSession.state?.listener?.name || 'Unknown';
-                        const userEmail = disconnectedSession.state?.spotify?.email || disconnectedSession.state?.listener?.email || '';
-                        
-                        history.push({
-                            type: 'user_disconnected',
-                            timestamp: Date.now(),
-                            userName,
-                            userEmail,
-                            details: {}
-                        });
-                        broadcastHistory();
+                    const session = sessions.get(sessionId);
+                    if (session) {
+                        logger.info(`WebSocket closed for session ${sessionId}, marking as disconnected (will cleanup after missed heartbeats)`);
+                        // Set WebSocket to null but keep session alive
+                        session.ws = null;
+                        // Session will be cleaned up by periodic heartbeat check if client doesn't reconnect
                     }
-                    
-                    // Remove session immediately
-                    sessions.delete(sessionId);
-                    
-                    // Clear any existing cleanup timer
-                    const existingTimer = sessionCleanupTimers.get(sessionId);
-                    if (existingTimer) {
-                        clearTimeout(existingTimer);
-                        sessionCleanupTimers.delete(sessionId);
-                    }
-                    
-                    logger.info(`Session ${sessionId} removed.`);
-                    broadcastSessionList();
                 }
             });
         });
@@ -1798,7 +1795,8 @@ app.post('/api/listener-login', (req: Request, res: Response) => {
     sessions.set(sessionId, {
         ws: null,
         userId: null,
-        state: { listener: { name, email } }
+        state: { listener: { name, email } },
+        lastHeartbeat: Date.now()
     });
     logger.info(`Listener session created: ${name} <${email}> [${sessionId}]`);
     res.json({ sessionId });
@@ -2140,7 +2138,7 @@ async function loadSessionsFromFile() {
                 for (const s of arr) {
                     // Rehydrate session object, ws is always null on startup
                     const { sessionId, userId, state } = s;
-                    const session = { ws: null, userId, state };
+                    const session = { ws: null, userId, state, lastHeartbeat: Date.now() };
                     // For Spotify sessions, try to refresh token if possible
                     if (state && state.spotify && state.spotify.refresh_token) {
                         try {
@@ -2165,6 +2163,54 @@ async function loadSessionsFromFile() {
     }
 } 
 
+// Periodic cleanup of stale sessions (those that haven't sent heartbeat in a while)
+const HEARTBEAT_TIMEOUT_MS = 60000; // 60 seconds - 2 missed heartbeats (clients ping every 30s)
+const CLEANUP_INTERVAL_MS = 30000; // Check every 30 seconds
+
+function cleanupStaleSessions() {
+    const now = Date.now();
+    const sessionsToRemove: string[] = [];
+    
+    for (const [sessionId, session] of sessions.entries()) {
+        const timeSinceHeartbeat = now - session.lastHeartbeat;
+        if (timeSinceHeartbeat > HEARTBEAT_TIMEOUT_MS) {
+            logger.info(`Session ${sessionId} is stale (no heartbeat for ${Math.floor(timeSinceHeartbeat / 1000)}s), removing`);
+            sessionsToRemove.push(sessionId);
+        }
+    }
+    
+    // Remove stale sessions and add disconnection events
+    for (const sessionId of sessionsToRemove) {
+        const session = sessions.get(sessionId);
+        if (session) {
+            const userName = session.state?.spotify?.name || session.state?.listener?.name || 'Unknown';
+            const userEmail = session.state?.spotify?.email || session.state?.listener?.email || '';
+            
+            // Add disconnection event to history
+            history.push({
+                type: 'user_disconnected',
+                timestamp: Date.now(),
+                userName,
+                userEmail,
+                details: {}
+            });
+            
+            sessions.delete(sessionId);
+            logger.info(`Removed stale session ${sessionId} (${userName})`);
+        }
+    }
+    
+    // Broadcast updates if any sessions were removed
+    if (sessionsToRemove.length > 0) {
+        broadcastSessionList();
+        broadcastHistory();
+        serializeSessions();
+    }
+}
+
+// Start periodic cleanup
+setInterval(cleanupStaleSessions, CLEANUP_INTERVAL_MS);
+logger.info(`Started periodic session cleanup (checking every ${CLEANUP_INTERVAL_MS / 1000}s, timeout after ${HEARTBEAT_TIMEOUT_MS / 1000}s)`);
 
 // Log all configured values at startup
 logger.info('Configured values:');
