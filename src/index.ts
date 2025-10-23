@@ -739,9 +739,20 @@ async function pollMasterUserPlayback() {
                         // We just commanded a track change, give Spotify time to respond
                         logger.info(`Track mismatch but within grace period (${timeSinceLastCommand}ms), waiting for Spotify to catch up...`);
                     } else if (isTrackInQueue) {
-                        // Master has naturally advanced to a track in our queue - update our state to match
-                        logger.info(`Master naturally advanced to ${masterTrackUri} which is in queue. Syncing state...`);
-                        // Find and set as current, remove from queue
+                        // Check if this is right after a manual skip
+                        const timeSinceManualSkip = lastManualSkipAt ? Date.now() - lastManualSkipAt : Infinity;
+                        const justManuallySkipped = timeSinceManualSkip < TRACK_CHANGE_GRACE_PERIOD_MS;
+                        
+                        if (justManuallySkipped) {
+                            // This is the result of a manual skip, don't add duplicate track_play event
+                            logger.info(`Master advanced to ${masterTrackUri} after manual skip - suppressing duplicate track_play event`);
+                            lastManualSkipAt = 0; // Reset the flag
+                        } else {
+                            // Master has naturally advanced to a track in our queue - update our state to match
+                            logger.info(`Master naturally advanced to ${masterTrackUri} which is in queue. Syncing state...`);
+                        }
+                        
+                        // Find and set as current, remove from queue (do this regardless)
                         const queueIndex = queueManager.getSubmittedTracks().findIndex(t => t.spotifyUri === masterTrackUri);
                         if (queueIndex !== -1) {
                             // Add old track to play history
@@ -758,16 +769,19 @@ async function pollMasterUserPlayback() {
                             masterTrackStarted = true;
                             saveTracksToFile();
                             
-                            // Add track play event to history (NOT for fallback tracks)
-                            const startingUserName = masterUserSessionId ? (sessions.get(masterUserSessionId)?.state?.spotify?.name || sessions.get(masterUserSessionId)?.state?.listener?.name || 'Unknown') : 'Unknown';
-                            const startingUserEmail = masterUserSessionId ? (sessions.get(masterUserSessionId)?.state?.spotify?.email || sessions.get(masterUserSessionId)?.state?.listener?.email || '') : '';
-                            history.push({
-                                type: 'track_play',
-                                timestamp: Date.now(),
-                                userName: startingUserName,
-                                userEmail: startingUserEmail,
-                                details: { track: { ...newTrack } }
-                            });
+                            // Add track play event to history ONLY if NOT after manual skip
+                            // Only add if track has actual details (name, artist, etc.) and not manually skipped
+                            if (!justManuallySkipped && newTrack.name && newTrack.artist) {
+                                const startingUserName = masterUserSessionId ? (sessions.get(masterUserSessionId)?.state?.spotify?.name || sessions.get(masterUserSessionId)?.state?.listener?.name || 'Unknown') : 'Unknown';
+                                const startingUserEmail = masterUserSessionId ? (sessions.get(masterUserSessionId)?.state?.spotify?.email || sessions.get(masterUserSessionId)?.state?.listener?.email || '') : '';
+                                history.push({
+                                    type: 'track_play',
+                                    timestamp: Date.now(),
+                                    userName: startingUserName,
+                                    userEmail: startingUserEmail,
+                                    details: { track: { ...newTrack } }
+                                });
+                            }
                             
                             broadcastTrackList();
                             broadcastMode();
