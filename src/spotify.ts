@@ -346,13 +346,33 @@ function createSpotifyRouter(sessions: Map<string, any>) {
                     res.redirect(redirectUrl);
                 }
             })
-            .catch((err: Error) => {
+            .catch((err: any) => {
+                // Better error extraction for Spotify API errors
+                let errorMessage = 'Unknown error';
+                let errorDetails: any = {};
+                
+                if (err && typeof err === 'object') {
+                    errorMessage = err.message || err.error || err.statusMessage || 'Unknown error';
+                    errorDetails = {
+                        message: err.message,
+                        statusCode: err.statusCode,
+                        body: err.body,
+                        error: err.error,
+                        error_description: err.error_description,
+                    };
+                }
+                
                 logger.error('Spotify token exchange failed', {
                     sessionId,
-                    error: err.message,
-                    stack: err.stack,
+                    errorMessage,
+                    errorDetails,
+                    fullError: JSON.stringify(err, null, 2),
+                    stack: err?.stack,
                 });
-                res.status(400).json({ error: 'Failed to get tokens from Spotify', details: err.message });
+                
+                const redirectUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/?error=spotify_auth_failed&details=${encodeURIComponent(errorMessage)}`;
+                logger.warn('Redirecting to frontend with error', { redirectUrl });
+                res.redirect(redirectUrl);
             });
     });
 
