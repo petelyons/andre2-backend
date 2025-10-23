@@ -1268,9 +1268,17 @@ function startWebSocketServer(server: http.Server): void {
                                 lastManualSkipAt = Date.now();
                                 // Before changing currentlyPlayingTrack, push to playHistory and history
                                 if (currentlyPlayingTrack) {
+                                    const trackCopy = { ...currentlyPlayingTrack };
+                                    logger.info('Adding to play history:', JSON.stringify({ 
+                                        name: trackCopy.name, 
+                                        artist: trackCopy.artist, 
+                                        album: trackCopy.album,
+                                        albumArtUrl: trackCopy.albumArtUrl,
+                                        spotifyUri: trackCopy.spotifyUri
+                                    }));
                                     playHistory.push({
                                         timestamp: Date.now(),
-                                        track: { ...currentlyPlayingTrack },
+                                        track: trackCopy,
                                         startedBy: masterUserSessionId ? (sessions.get(masterUserSessionId)?.state?.spotify?.name || sessions.get(masterUserSessionId)?.state?.listener?.name || '') : undefined
                                     });
                                     broadcastPlayHistory();
