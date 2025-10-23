@@ -99,6 +99,12 @@ interface RemoveTrackMessage {
     sessionId: string;
 }
 
+interface DelayTrackMessage {
+    type: 'delay_track';
+    spotifyUri: string;
+    sessionId: string;
+}
+
 interface AirhornMessage {
     type: 'airhorn';
     airhorn: string;
@@ -124,7 +130,7 @@ interface TakeMasterControlMessage {
 }
 
 // Union type for all messages
-type Message = LoginMessage | GenericMessage | PlayTrackMessage | GetTracksMessage | JamMessage | PlayMessage | PauseMessage | SessionPlayMessage | SessionPauseMessage | GetSessionsMessage | RemoveTrackMessage | AirhornMessage | GetPlayHistoryMessage | MasterSkipMessage | StartFallbackMessage | TakeMasterControlMessage;
+type Message = LoginMessage | GenericMessage | PlayTrackMessage | GetTracksMessage | JamMessage | PlayMessage | PauseMessage | SessionPlayMessage | SessionPauseMessage | GetSessionsMessage | RemoveTrackMessage | DelayTrackMessage | AirhornMessage | GetPlayHistoryMessage | MasterSkipMessage | StartFallbackMessage | TakeMasterControlMessage;
 
 // Middleware
 // CORS configuration - must be before other middleware
@@ -1069,6 +1075,20 @@ function startWebSocketServer(server: http.Server): void {
                                     broadcastTrackList();
                                     broadcastMode();
                                     broadcastHistory();
+                                }
+                            }
+                            break;
+                        
+                        case 'delay_track':
+                            // Move track back by one position in the queue
+                            if (message.spotifyUri && message.sessionId) {
+                                const moved = queueManager.moveTrackBackOne(message.spotifyUri);
+                                if (moved) {
+                                    saveTracksToFile();
+                                    logger.info(`Track delayed one position: ${message.spotifyUri} by ${message.sessionId}`);
+                                    broadcastTrackList();
+                                } else {
+                                    logger.info(`Delay request ignored (not found or last item): ${message.spotifyUri}`);
                                 }
                             }
                             break;

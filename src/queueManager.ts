@@ -115,6 +115,22 @@ export class QueueManager {
     }
 
     /**
+     * Move a track back by one position in the submitted queue.
+     * Returns true if moved, false if not possible (e.g., last item or not found).
+     */
+    moveTrackBackOne(spotifyUri: string): boolean {
+        const idx = this.submittedTracks.findIndex(t => t.spotifyUri === spotifyUri);
+        if (idx === -1 || idx >= this.submittedTracks.length - 1) {
+            return false;
+        }
+        const nextIdx = idx + 1;
+        const tmp = this.submittedTracks[idx];
+        this.submittedTracks[idx] = this.submittedTracks[nextIdx];
+        this.submittedTracks[nextIdx] = tmp;
+        return true;
+    }
+
+    /**
      * Get the next track to play (prioritizes submitted tracks over fallback)
      * Returns null if no tracks available
      */
