@@ -32,7 +32,7 @@ interface Session {
 }
 
 interface HistoryEvent {
-    type: 'track_added' | 'jam' | 'unjam' | 'airhorn' | 'fallback_play' | 'track_play' | 'user_connected' | 'user_disconnected' | 'message';
+    type: 'track_added' | 'jam' | 'unjam' | 'airhorn' | 'fallback_play' | 'track_play' | 'user_connected' | 'user_disconnected' | 'message' | 'track_skip';
     timestamp: number;
     userName: string;
     userEmail: string;
@@ -1266,7 +1266,7 @@ function startWebSocketServer(server: http.Server): void {
                             logger.info('Master skip requested');
                             if (mode === 'master_play') {
                                 lastManualSkipAt = Date.now();
-                                // Before changing currentlyPlayingTrack, push to playHistory
+                                // Before changing currentlyPlayingTrack, push to playHistory and history
                                 if (currentlyPlayingTrack) {
                                     playHistory.push({
                                         timestamp: Date.now(),
@@ -1274,6 +1274,18 @@ function startWebSocketServer(server: http.Server): void {
                                         startedBy: masterUserSessionId ? (sessions.get(masterUserSessionId)?.state?.spotify?.name || sessions.get(masterUserSessionId)?.state?.listener?.name || '') : undefined
                                     });
                                     broadcastPlayHistory();
+                                    
+                                    // Add skip event to history
+                                    const skipperName = masterUserSessionId ? (sessions.get(masterUserSessionId)?.state?.spotify?.name || sessions.get(masterUserSessionId)?.state?.listener?.name || 'Unknown') : 'Unknown';
+                                    const skipperEmail = masterUserSessionId ? (sessions.get(masterUserSessionId)?.state?.spotify?.email || sessions.get(masterUserSessionId)?.state?.listener?.email || '') : '';
+                                    history.push({
+                                        type: 'track_skip',
+                                        timestamp: Date.now(),
+                                        userName: skipperName,
+                                        userEmail: skipperEmail,
+                                        details: { track: { ...currentlyPlayingTrack } }
+                                    });
+                                    broadcastHistory();
                                 }
                                 
                                 // Get master user's access token for fallback playlist loading
@@ -1509,7 +1521,7 @@ function startWebSocketServer(server: http.Server): void {
             // Handle disconnection
             ws.on('close', () => {
                 if (sessionId) {
-                    logger.info(`Session ${sessionId} disconnected, scheduling cleanup.`);
+                    logger.info(`Session ${sessionId} disconnected, removing immediately.`);
                     
                     // Add disconnection event to history
                     const disconnectedSession = sessions.get(sessionId);
@@ -1527,14 +1539,18 @@ function startWebSocketServer(server: http.Server): void {
                         broadcastHistory();
                     }
                     
-                    // Schedule session removal after 60 seconds
-                    const timer = setTimeout(() => {
-                sessions.delete(sessionId);
+                    // Remove session immediately
+                    sessions.delete(sessionId);
+                    
+                    // Clear any existing cleanup timer
+                    const existingTimer = sessionCleanupTimers.get(sessionId);
+                    if (existingTimer) {
+                        clearTimeout(existingTimer);
                         sessionCleanupTimers.delete(sessionId);
-                        logger.info(`Session ${sessionId} removed after timeout.`);
-                        broadcastSessionList();
-                    }, 60000);
-                    sessionCleanupTimers.set(sessionId, timer);
+                    }
+                    
+                    logger.info(`Session ${sessionId} removed.`);
+                    broadcastSessionList();
                 }
             });
         });
