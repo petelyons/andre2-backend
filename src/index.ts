@@ -267,9 +267,13 @@ function loadTracksFromFile() {
     }
 }
 
-// Helper to broadcast the full track list to all connected clients
-function broadcastTrackList() {
-    const trackList = queueManager.getSubmittedTracks().map(t => ({
+// Helper to build track list with fallback tracks when needed
+function getDisplayTrackList() {
+    const submittedTracks = queueManager.getSubmittedTracks();
+    const fallbackInfo = queueManager.getFallbackInfo();
+    
+    // Start with user-submitted tracks (marked as not fallback)
+    const trackList = submittedTracks.map(t => ({
         spotifyUri: t.spotifyUri,
         userEmail: t.userEmail,
         spotifyName: t.spotifyName,
@@ -277,10 +281,41 @@ function broadcastTrackList() {
         artist: t.artist,
         album: t.album,
         albumArtUrl: t.albumArtUrl,
-        jammers: t.jammers || []
+        jammers: t.jammers || [],
+        isFallback: false
     }));
     
+    // If we have fewer than 10 user tracks, add fallback tracks to reach 10
+    if (submittedTracks.length < 10 && fallbackInfo) {
+        const fallbackTracks = queueManager.getFallbackTracks();
+        const neededFallbackCount = Math.min(10 - submittedTracks.length, fallbackTracks.length);
+        
+        for (let i = 0; i < neededFallbackCount; i++) {
+            const fallbackTrack = fallbackTracks[i];
+            trackList.push({
+                spotifyUri: fallbackTrack.spotifyUri,
+                userEmail: '',
+                spotifyName: fallbackInfo.name || 'Fallback Playlist',
+                name: fallbackTrack.name,
+                artist: fallbackTrack.artist,
+                album: fallbackTrack.album,
+                albumArtUrl: fallbackTrack.albumArtUrl,
+                jammers: fallbackTrack.jammers || [],
+                isFallback: true
+            });
+        }
+    }
+    
+    return trackList;
+}
+
+// Helper to broadcast the full track list to all connected clients
+function broadcastTrackList() {
+    const trackList = getDisplayTrackList();
+    
     logger.info('=== BROADCASTING TRACK LIST ===', {
+        userTracks: queueManager.getSubmittedCount(),
+        fallbackTracksAdded: trackList.length - queueManager.getSubmittedCount(),
         totalTracks: trackList.length,
         totalSessions: sessions.size,
     });
@@ -990,16 +1025,7 @@ function startWebSocketServer(server: http.Server): void {
                             // Send initial state
                             ws.send(JSON.stringify({
                                 type: 'tracks_list',
-                                tracks: queueManager.getSubmittedTracks().map(t => ({
-                                    spotifyUri: t.spotifyUri,
-                                    userEmail: t.userEmail,
-                                    spotifyName: t.spotifyName,
-                                    name: t.name,
-                                    artist: t.artist,
-                                    album: t.album,
-                                    albumArtUrl: t.albumArtUrl,
-                                    jammers: t.jammers || []
-                                }))
+                                tracks: getDisplayTrackList()
                             }));
                             ws.send(JSON.stringify({
                                 type: 'mode',
@@ -1017,16 +1043,7 @@ function startWebSocketServer(server: http.Server): void {
                             // Respond with the current track list
                             ws.send(JSON.stringify({
                                 type: 'tracks_list',
-                                tracks: queueManager.getSubmittedTracks().map(t => ({
-                                    spotifyUri: t.spotifyUri,
-                                    userEmail: t.userEmail,
-                                    spotifyName: t.spotifyName,
-                                    name: t.name,
-                                    artist: t.artist,
-                                    album: t.album,
-                                    albumArtUrl: t.albumArtUrl,
-                                    jammers: t.jammers || []
-                                }))
+                                tracks: getDisplayTrackList()
                             }));
                             break;
                         case 'get_sessions':
