@@ -185,6 +185,8 @@ let lastPlaybackState: {
 // Track when we last commanded a track change (to allow grace period)
 let lastTrackChangeCommand: number = 0;
 const TRACK_CHANGE_GRACE_PERIOD_MS = 3000; // 3 seconds for Spotify to respond
+// Additional guard to suppress end detection right after manual skip
+let lastManualSkipAt: number = 0;
 
 // Playback failure tracking
 let playbackFailureCheckTime: number = 0;
@@ -619,36 +621,42 @@ async function pollMasterUserPlayback() {
         }
         // If detected, advance to next track
         if (detectedTrackEnd) {
-            logger.info('Advancing to next track due to detected end.');
-            
-            // Before changing currentlyPlayingTrack, push to playHistory
-            if (currentlyPlayingTrack) {
-                playHistory.push({
-                    timestamp: Date.now(),
-                    track: { ...currentlyPlayingTrack },
-                    startedBy: masterUserSessionId ? (sessions.get(masterUserSessionId)?.state?.spotify?.name || sessions.get(masterUserSessionId)?.state?.listener?.name || '') : undefined
-                });
-                broadcastPlayHistory();
-            }
-            
-            // Get master user's access token for fallback playlist loading
-            const masterAccessToken = masterSession?.state?.spotify?.access_token;
-            const nextTrackInfo = await queueManager.getNextTrack(masterAccessToken);
-            
-            if (nextTrackInfo) {
-                const newTrack = nextTrackInfo.track;
-                await setCurrentTrackAndStart(newTrack, nextTrackInfo.isFallback, true);
+            // Suppress auto-advance if we just manually skipped within grace window
+            if (lastManualSkipAt && (Date.now() - lastManualSkipAt) < TRACK_CHANGE_GRACE_PERIOD_MS) {
+                logger.info('Detected end right after manual skip - suppressing auto-advance');
+                lastManualSkipAt = 0;
             } else {
-                currentlyPlayingTrack = null;
-                masterTrackStarted = false;
-                if (mode !== 'master_pause') {
-                    mode = 'master_pause';
-                    logger.info('No more tracks in queue and no fallback playlist, stopping playback');
-                    broadcastTrackList();
-                    broadcastMode();
+                logger.info('Advancing to next track due to detected end.');
+                
+                // Before changing currentlyPlayingTrack, push to playHistory
+                if (currentlyPlayingTrack) {
+                    playHistory.push({
+                        timestamp: Date.now(),
+                        track: { ...currentlyPlayingTrack },
+                        startedBy: masterUserSessionId ? (sessions.get(masterUserSessionId)?.state?.spotify?.name || sessions.get(masterUserSessionId)?.state?.listener?.name || '') : undefined
+                    });
+                    broadcastPlayHistory();
                 }
+                
+                // Get master user's access token for fallback playlist loading
+                const masterAccessToken = masterSession?.state?.spotify?.access_token;
+                const nextTrackInfo = await queueManager.getNextTrack(masterAccessToken);
+                
+                if (nextTrackInfo) {
+                    const newTrack = nextTrackInfo.track;
+                    await setCurrentTrackAndStart(newTrack, nextTrackInfo.isFallback, true);
+                } else {
+                    currentlyPlayingTrack = null;
+                    masterTrackStarted = false;
+                    if (mode !== 'master_pause') {
+                        mode = 'master_pause';
+                        logger.info('No more tracks in queue and no fallback playlist, stopping playback');
+                        broadcastTrackList();
+                        broadcastMode();
+                    }
+                }
+                return; // Skip the rest of the function for this poll
             }
-            return; // Skip the rest of the function for this poll
         }
         
         if (mode === 'master_pause' as typeof mode) {
@@ -1141,6 +1149,7 @@ function startWebSocketServer(server: http.Server): void {
                             // Skip to next track (user-submitted or fallback)
                             logger.info('Master skip requested');
                             if (mode === 'master_play') {
+                                lastManualSkipAt = Date.now();
                                 // Before changing currentlyPlayingTrack, push to playHistory
                                 if (currentlyPlayingTrack) {
                                     playHistory.push({

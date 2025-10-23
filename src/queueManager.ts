@@ -185,9 +185,19 @@ export class QueueManager {
             this.currentFallbackPlaylistUrl = playlistUrl;
             this.currentFallbackPlaylistName = playlistInfo.name;
             
-            // Clear existing fallback queue and populate with new tracks
+            // Clear existing fallback queue and populate with new tracks (randomized order)
             this.fallbackQueue.length = 0;
-            for (const track of tracks) {
+
+            // Shuffle tracks using Fisher-Yates to randomize fallback playback order
+            const shuffled = tracks.slice();
+            for (let i = shuffled.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                const tmp = shuffled[i];
+                shuffled[i] = shuffled[j];
+                shuffled[j] = tmp;
+            }
+
+            for (const track of shuffled) {
                 this.fallbackQueue.push({
                     spotifyUri: track.spotifyUri,
                     userEmail: 'fallback@system',
