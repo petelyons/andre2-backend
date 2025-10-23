@@ -32,7 +32,7 @@ interface Session {
 }
 
 interface HistoryEvent {
-    type: 'track_added' | 'jam' | 'unjam' | 'airhorn' | 'fallback_play';
+    type: 'track_added' | 'jam' | 'unjam' | 'airhorn' | 'fallback_play' | 'track_play' | 'user_connected' | 'user_disconnected' | 'message';
     timestamp: number;
     userName: string;
     userEmail: string;
