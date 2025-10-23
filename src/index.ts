@@ -213,8 +213,10 @@ const playHistory: PlayHistoryEntry[] = [];
 // });
 
 // JSON persistence for submittedTracks
-const TRACKS_FILE = path.join(__dirname, 'tracks.json');
-const SESSIONS_FILE = path.join(__dirname, 'sessions.json');
+// Use DATA_DIR environment variable if set, otherwise use __dirname for local development
+const DATA_DIR = process.env.DATA_DIR || __dirname;
+const TRACKS_FILE = path.join(DATA_DIR, 'tracks.json');
+const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
 function saveTracksToFile() {
     try {
         fs.writeFileSync(TRACKS_FILE, JSON.stringify(queueManager.getSubmittedTracks(), null, 2));
@@ -921,7 +923,65 @@ function startWebSocketServer(server: http.Server): void {
                                 ws.close();
                                 break;
                             }
+                            
+                            // Check for and remove duplicate sessions for the same email
+                            // Policy: Only one session per email address is allowed
+                            const currentUserEmail = spotifyEmail || listenerEmail;
+                            let masterWasTransferred = false;
+                            
+                            if (currentUserEmail) {
+                                const duplicateSessions: string[] = [];
+                                
+                                for (const [existingSessionId, existingSession] of sessions.entries()) {
+                                    // Skip the current session
+                                    if (existingSessionId === sessionId) continue;
+                                    
+                                    const existingEmail = existingSession.state?.spotify?.email || existingSession.state?.listener?.email;
+                                    if (existingEmail && existingEmail.toLowerCase() === currentUserEmail.toLowerCase()) {
+                                        duplicateSessions.push(existingSessionId);
+                                    }
+                                }
+                                
+                                // Remove duplicate sessions and transfer master status if needed
+                                for (const duplicateSessionId of duplicateSessions) {
+                                    const duplicateSession = sessions.get(duplicateSessionId);
+                                    const duplicateWs = duplicateSession?.ws;
+                                    
+                                    // If this duplicate session is the master, transfer master status to new session
+                                    if (duplicateSessionId === masterUserSessionId && spotifyEmail && session.state?.spotify?.access_token) {
+                                        logger.info(`Transferring master status from old session ${duplicateSessionId} to new session ${sessionId} (same user: ${currentUserEmail})`);
+                                        masterUserSessionId = sessionId;
+                                        masterWasTransferred = true;
+                                        
+                                        // Restart polling if we're in play mode
+                                        if (mode === 'master_play') {
+                                            stopPolling();
+                                            startPolling();
+                                        }
+                                    }
+                                    
+                                    // Delete the duplicate session
+                                    logger.info(`Removing duplicate session ${duplicateSessionId} for user ${currentUserEmail}`);
+                                    if (duplicateWs && duplicateWs.readyState === 1) {
+                                        duplicateWs.close();
+                                    }
+                                    sessions.delete(duplicateSessionId);
+                                    
+                                    // Clear any cleanup timer for the duplicate session
+                                    if (sessionCleanupTimers.has(duplicateSessionId)) {
+                                        clearTimeout(sessionCleanupTimers.get(duplicateSessionId));
+                                        sessionCleanupTimers.delete(duplicateSessionId);
+                                    }
+                                }
+                            }
+                            
                             assignMasterUserIfNeeded();
+                            
+                            // If master was transferred, broadcast the mode update to all clients
+                            if (masterWasTransferred) {
+                                broadcastMode();
+                            }
+                            
                                     ws.send(JSON.stringify({
                                         type: 'login_success',
                                         sessionId,
@@ -946,6 +1006,7 @@ function startWebSocketServer(server: http.Server): void {
                                 mode,
                                 currentlyPlayingTrack,
                                 masterUserSessionId,
+                                canTakeMasterControl: canTakeMasterControl(currentUserEmail),
                                 fallbackPlaylist: queueManager.getFallbackInfo(),
                             }));
                             if (sessionId) sendSessionMode(sessionId);
