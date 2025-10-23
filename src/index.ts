@@ -129,8 +129,14 @@ interface TakeMasterControlMessage {
     sessionId: string;
 }
 
+interface HistoryMessageMessage {
+    type: 'history_message';
+    message: string;
+    sessionId: string;
+}
+
 // Union type for all messages
-type Message = LoginMessage | GenericMessage | PlayTrackMessage | GetTracksMessage | JamMessage | PlayMessage | PauseMessage | SessionPlayMessage | SessionPauseMessage | GetSessionsMessage | RemoveTrackMessage | DelayTrackMessage | AirhornMessage | GetPlayHistoryMessage | MasterSkipMessage | StartFallbackMessage | TakeMasterControlMessage;
+type Message = LoginMessage | GenericMessage | PlayTrackMessage | GetTracksMessage | JamMessage | PlayMessage | PauseMessage | SessionPlayMessage | SessionPauseMessage | GetSessionsMessage | RemoveTrackMessage | DelayTrackMessage | AirhornMessage | GetPlayHistoryMessage | MasterSkipMessage | StartFallbackMessage | TakeMasterControlMessage | HistoryMessageMessage;
 
 // Middleware
 // CORS configuration - must be before other middleware
@@ -747,12 +753,26 @@ async function pollMasterUserPlayback() {
                                 });
                             }
                             // Set new current track
-                            currentlyPlayingTrack = queueManager.getSubmittedTracks().splice(queueIndex, 1)[0];
+                            const newTrack = queueManager.getSubmittedTracks().splice(queueIndex, 1)[0];
+                            currentlyPlayingTrack = newTrack;
                             masterTrackStarted = true;
                             saveTracksToFile();
+                            
+                            // Add track play event to history (NOT for fallback tracks)
+                            const startingUserName = masterUserSessionId ? (sessions.get(masterUserSessionId)?.state?.spotify?.name || sessions.get(masterUserSessionId)?.state?.listener?.name || 'Unknown') : 'Unknown';
+                            const startingUserEmail = masterUserSessionId ? (sessions.get(masterUserSessionId)?.state?.spotify?.email || sessions.get(masterUserSessionId)?.state?.listener?.email || '') : '';
+                            history.push({
+                                type: 'track_play',
+                                timestamp: Date.now(),
+                                userName: startingUserName,
+                                userEmail: startingUserEmail,
+                                details: { track: { ...newTrack } }
+                            });
+                            
                             broadcastTrackList();
                             broadcastMode();
                             broadcastPlayHistory();
+                            broadcastHistory();
                         }
                     } else {
                         // Master is playing something not in our queue - try to correct
@@ -1038,6 +1058,16 @@ function startWebSocketServer(server: http.Server): void {
                             if (sessionId) sendSessionMode(sessionId);
                             broadcastSessionList();
                             serializeSessions();
+                            
+                            // Add user connected event to history
+                            history.push({
+                                type: 'user_connected',
+                                timestamp: Date.now(),
+                                userName: spotifyName || listenerName || 'Unknown',
+                                userEmail: currentUserEmail || '',
+                                details: {}
+                            });
+                            broadcastHistory();
                             break;
                         case 'get_tracks':
                             // Respond with the current track list
@@ -1196,19 +1226,7 @@ function startWebSocketServer(server: http.Server): void {
                                             logger.info(`Now playing: ${newTrack.name || newTrack.spotifyUri}`);
                                         } else {
                                             logger.info(`Now playing fallback track: ${newTrack.name || newTrack.spotifyUri}`);
-                                            
-                                            // Record fallback play in history
-                                            history.push({
-                                                type: 'fallback_play',
-                                                timestamp: Date.now(),
-                                                userName: 'System',
-                                                userEmail: 'fallback@system',
-                                                details: { 
-                                                    track: newTrack.name || newTrack.spotifyUri,
-                                                    playlist: newTrack.spotifyName || 'Fallback Playlist'
-                                                }
-                                            });
-                                            broadcastHistory();
+                                            // Don't add fallback plays to history per user request
                                         }
                                         broadcastTrackList();
                                     }
@@ -1465,6 +1483,23 @@ function startWebSocketServer(server: http.Server): void {
                                 }
                             }
                             break;
+                        case 'history_message':
+                            if (message.message && message.sessionId) {
+                                const msgSession = sessions.get(message.sessionId);
+                                const userName = msgSession?.state?.spotify?.name || msgSession?.state?.listener?.name || 'Unknown';
+                                const userEmail = msgSession?.state?.spotify?.email || msgSession?.state?.listener?.email || '';
+                                
+                                history.push({
+                                    type: 'message',
+                                    timestamp: Date.now(),
+                                    userName,
+                                    userEmail,
+                                    details: { message: message.message }
+                                });
+                                broadcastHistory();
+                                logger.info(`History message posted by ${userName}: ${message.message}`);
+                            }
+                            break;
                     }
                 } catch (error) {
                     logger.error('Error processing message:', error);
@@ -1475,6 +1510,23 @@ function startWebSocketServer(server: http.Server): void {
             ws.on('close', () => {
                 if (sessionId) {
                     logger.info(`Session ${sessionId} disconnected, scheduling cleanup.`);
+                    
+                    // Add disconnection event to history
+                    const disconnectedSession = sessions.get(sessionId);
+                    if (disconnectedSession) {
+                        const userName = disconnectedSession.state?.spotify?.name || disconnectedSession.state?.listener?.name || 'Unknown';
+                        const userEmail = disconnectedSession.state?.spotify?.email || disconnectedSession.state?.listener?.email || '';
+                        
+                        history.push({
+                            type: 'user_disconnected',
+                            timestamp: Date.now(),
+                            userName,
+                            userEmail,
+                            details: {}
+                        });
+                        broadcastHistory();
+                    }
+                    
                     // Schedule session removal after 60 seconds
                     const timer = setTimeout(() => {
                 sessions.delete(sessionId);
@@ -1734,7 +1786,33 @@ function cleanupInvalidSessions() {
 class Config {
     private static config = {
         // Hardcoded list of available airhorns (must match frontend's /public/airhorns/)
-        airhorns: ['air-horn', 'evil-giggle', 'here-we-go', 'ship-horn', 'vintage-car-horn']
+        airhorns: [
+            'air-horn',
+            'airhorn',
+            'America',
+            'baking_soda',
+            'boat',
+            'dj_airhorn',
+            'evil-giggle',
+            'foghorn',
+            'fuck_all_yall',
+            'gedolah',
+            'growl',
+            'here-we-go',
+            'hohoho',
+            'mk_toasty',
+            'reemix',
+            'reload_shot',
+            'shevarim',
+            'ship-horn',
+            'tekiah',
+            'teruah',
+            'trombone',
+            'vintage-car-horn',
+            'vuvuzela',
+            'wookie',
+            'zillaroar'
+        ]
     };
     static get(key: keyof typeof Config.config) {
         return Config.config[key];
