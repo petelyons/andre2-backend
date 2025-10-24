@@ -1172,6 +1172,11 @@ function startWebSocketServer(server: http.Server): void {
                                 canTakeMasterControl: canTakeMasterControl(currentUserEmail),
                                 fallbackPlaylist: queueManager.getFallbackInfo(),
                             }));
+                            // Send history to newly connected user
+                            ws.send(JSON.stringify({
+                                type: 'history',
+                                history: history.slice(-100) // Send last 100 events
+                            }));
                             if (sessionId) sendSessionMode(sessionId);
                             broadcastSessionList();
                             serializeSessions();
