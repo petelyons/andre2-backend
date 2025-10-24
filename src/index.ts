@@ -1241,6 +1241,10 @@ function startWebSocketServer(server: http.Server): void {
                                     
                                     // Check if already in submitted tracks
                                     if (!queueManager.hasTrack(message.spotifyUri)) {
+                                        // Remove from fallback queue to avoid playing it twice
+                                        queueManager.removeFallbackTrack(message.spotifyUri);
+                                        
+                                        // Add to real queue
                                         queueManager.addTrack({
                                             spotifyUri: fallbackTrack.spotifyUri,
                                             userEmail: jammerEmail,

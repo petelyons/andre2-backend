@@ -132,6 +132,20 @@ export class QueueManager {
     }
 
     /**
+     * Remove a track from the fallback queue by spotifyUri.
+     * Returns true if removed, false if not found.
+     */
+    removeFallbackTrack(spotifyUri: string): boolean {
+        const idx = this.fallbackQueue.findIndex(t => t.spotifyUri === spotifyUri);
+        if (idx === -1) {
+            return false;
+        }
+        this.fallbackQueue.splice(idx, 1);
+        logger.info(`Removed track from fallback queue: ${spotifyUri}`);
+        return true;
+    }
+
+    /**
      * Get the next track to play (prioritizes submitted tracks over fallback)
      * Returns null if no tracks available
      */
