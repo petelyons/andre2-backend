@@ -187,6 +187,8 @@ const sessionModes = new Map<string, 'session_play' | 'session_pause'>();
 
 // Shared currently playing track
 let currentlyPlayingTrack: SubmittedTrack | null = null;
+let currentTrackIsFallback: boolean = false;
+let currentTrackConsumed: boolean = false; // Track whether current track was removed from queue
 
 // Shared master user state
 let masterUserSessionId: string | null = null;
@@ -597,14 +599,18 @@ async function playTrackForSessions(track: SubmittedTrack, onlySessionPlay: bool
 }
 
 // Helper to set current track, record/history/log, start failure tracking, play, and broadcast
+// NOTE: Track should be peeked but NOT consumed yet - consumption happens after playback confirmation
 async function setCurrentTrackAndStart(newTrack: SubmittedTrack, isFallback: boolean, onlySessionPlay: boolean) {
     currentlyPlayingTrack = newTrack;
+    currentTrackIsFallback = isFallback;
+    currentTrackConsumed = false; // Mark as not yet consumed
+    
     if (isFallback) {
-        logger.info(`Playing from fallback: ${newTrack.name || newTrack.spotifyUri}`);
+        logger.info(`Playing from fallback: ${newTrack.name || newTrack.spotifyUri} (not consumed from queue yet)`);
         recordFallbackPlay(newTrack);
     } else {
-        logger.info(`Now playing: ${newTrack.name || newTrack.spotifyUri}`);
-        saveTracksToFile();
+        logger.info(`Now playing: ${newTrack.name || newTrack.spotifyUri} (not consumed from queue yet)`);
+        // Don't save tracks yet - track still in queue until playback confirmed
     }
     masterTrackStarted = false;
     lastTrackChangeCommand = Date.now();
@@ -670,7 +676,7 @@ async function pollMasterUserPlayback() {
                     
                     // Try to play next track
                     const masterAccessToken = masterSession?.state?.spotify?.access_token;
-                    const nextTrackInfo = await queueManager.getNextTrack(masterAccessToken);
+                    const nextTrackInfo = await queueManager.peekNextTrack(masterAccessToken);
                     
                     if (nextTrackInfo) {
                         const newTrack = nextTrackInfo.track;
@@ -748,7 +754,7 @@ async function pollMasterUserPlayback() {
                 
                 // Get master user's access token for fallback playlist loading
                 const masterAccessToken = masterSession?.state?.spotify?.access_token;
-                const nextTrackInfo = await queueManager.getNextTrack(masterAccessToken);
+                const nextTrackInfo = await queueManager.peekNextTrack(masterAccessToken);
                 
                 if (nextTrackInfo) {
                     const newTrack = nextTrackInfo.track;
@@ -756,6 +762,7 @@ async function pollMasterUserPlayback() {
                 } else {
                     currentlyPlayingTrack = null;
                     masterTrackStarted = false;
+                    currentTrackConsumed = true; // No track to consume
                     if (mode !== 'master_pause') {
                         mode = 'master_pause';
                         logger.info('No more tracks in queue and no fallback playlist, stopping playback');
@@ -912,7 +919,7 @@ async function pollMasterUserPlayback() {
                     
                     // Get master user's access token for fallback playlist loading
                     const masterAccessToken = masterSession?.state?.spotify?.access_token;
-                    const nextTrackInfo = await queueManager.getNextTrack(masterAccessToken);
+                    const nextTrackInfo = await queueManager.peekNextTrack(masterAccessToken);
                     
                     if (nextTrackInfo) {
                         const newTrack = nextTrackInfo.track;
@@ -921,6 +928,7 @@ async function pollMasterUserPlayback() {
                         // No more tracks in queue and no fallback
                         currentlyPlayingTrack = null;
                         masterTrackStarted = false;
+                        currentTrackConsumed = true; // No track to consume
                         if (mode !== 'master_pause') {
                             mode = 'master_pause';
                             logger.info('No more tracks in queue and no fallback playlist, stopping playback');
@@ -940,6 +948,16 @@ async function pollMasterUserPlayback() {
                     if (currentlyPlayingTrack) {
                         masterTrackStarted = true;
                         logger.info(`Master user started playing track: ${currentlyPlayingTrack.name}`);
+                        
+                        // Consume track from queue now that playback is confirmed
+                        if (!currentTrackConsumed) {
+                            queueManager.consumeNextTrack(currentTrackIsFallback);
+                            currentTrackConsumed = true;
+                            if (!currentTrackIsFallback) {
+                                saveTracksToFile(); // Save after consuming submitted track
+                            }
+                            logger.info(`✓ Track consumed from queue after playback confirmation`);
+                        }
                     }
                     broadcastMode();
                 } else if (newState === 'pause' && mode !== 'master_pause') {
@@ -1381,15 +1399,16 @@ function startWebSocketServer(server: http.Server): void {
                                 if (!currentlyPlayingTrack) {
                                     const masterSession = masterUserSessionId ? sessions.get(masterUserSessionId) : null;
                                     const masterAccessToken = masterSession?.state?.spotify?.access_token;
-                                    const nextTrackInfo = await queueManager.getNextTrack(masterAccessToken);
+                                    const nextTrackInfo = await queueManager.peekNextTrack(masterAccessToken);
                                     if (nextTrackInfo) {
                                         const newTrack = nextTrackInfo.track;
                                         currentlyPlayingTrack = newTrack;
+                                        currentTrackIsFallback = nextTrackInfo.isFallback;
+                                        currentTrackConsumed = false; // Track not yet consumed
                                         if (!nextTrackInfo.isFallback) {
-                                            saveTracksToFile();
-                                            logger.info(`Now playing: ${newTrack.name || newTrack.spotifyUri}`);
+                                            logger.info(`Now playing: ${newTrack.name || newTrack.spotifyUri} (not consumed yet)`);
                                         } else {
-                                            logger.info(`Now playing fallback track: ${newTrack.name || newTrack.spotifyUri}`);
+                                            logger.info(`Now playing fallback track: ${newTrack.name || newTrack.spotifyUri} (not consumed yet)`);
                                             // Don't add fallback plays to history per user request
                                         }
                                         broadcastTrackList();
@@ -1463,7 +1482,7 @@ function startWebSocketServer(server: http.Server): void {
                                 // Get master user's access token for fallback playlist loading
                                 const masterSession = masterUserSessionId ? sessions.get(masterUserSessionId) : null;
                                 const masterAccessToken = masterSession?.state?.spotify?.access_token;
-                                const nextTrackInfo = await queueManager.getNextTrack(masterAccessToken);
+                                const nextTrackInfo = await queueManager.peekNextTrack(masterAccessToken);
                                 
                                 if (nextTrackInfo) {
                                     const newTrack = nextTrackInfo.track;
@@ -1496,7 +1515,7 @@ function startWebSocketServer(server: http.Server): void {
                                 broadcastPlayHistory();
                             }
                             
-                            const fallbackTrackInfo = await queueManager.getNextTrack(fbMasterAccessToken);
+                            const fallbackTrackInfo = await queueManager.peekNextTrack(fbMasterAccessToken);
                             
                             if (fallbackTrackInfo) {
                                 const fbTrack = fallbackTrackInfo.track;
@@ -1584,16 +1603,17 @@ function startWebSocketServer(server: http.Server): void {
                                 // Get master user's access token for fallback playlist loading
                                 const masterSession = masterUserSessionId ? sessions.get(masterUserSessionId) : null;
                                 const masterAccessToken = masterSession?.state?.spotify?.access_token;
-                                const nextTrackInfo = await queueManager.getNextTrack(masterAccessToken);
+                                const nextTrackInfo = await queueManager.peekNextTrack(masterAccessToken);
                                 
                                 if (nextTrackInfo) {
                                     const newTrack = nextTrackInfo.track;
                                     currentlyPlayingTrack = newTrack;
+                                    currentTrackIsFallback = nextTrackInfo.isFallback;
+                                    currentTrackConsumed = false; // Track not yet consumed
                                     if (!nextTrackInfo.isFallback) {
-                                        saveTracksToFile();
-                                        logger.info(`Skipped to: ${newTrack.name || newTrack.spotifyUri}`);
+                                        logger.info(`Skipped to: ${newTrack.name || newTrack.spotifyUri} (not consumed yet)`);
                                     } else {
-                                        logger.info(`Skipped to fallback queue: ${newTrack.name || newTrack.spotifyUri}`);
+                                        logger.info(`Skipped to fallback queue: ${newTrack.name || newTrack.spotifyUri} (not consumed yet)`);
                                         
                                         // Record fallback play in history
                                         history.push({

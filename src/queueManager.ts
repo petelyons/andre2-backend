@@ -146,26 +146,19 @@ export class QueueManager {
     }
 
     /**
-     * Get the next track to play (prioritizes submitted tracks over fallback)
+     * Peek at the next track without removing it from the queue
      * Returns null if no tracks available
      */
-    async getNextTrack(accessToken?: string): Promise<{ track: SubmittedTrack; isFallback: boolean } | null> {
+    async peekNextTrack(accessToken?: string): Promise<{ track: SubmittedTrack; isFallback: boolean } | null> {
         // First check submitted tracks
         if (this.submittedTracks.length > 0) {
-            const track = this.submittedTracks.shift()!;
+            const track = this.submittedTracks[0]; // Peek, don't remove
             return { track, isFallback: false };
         }
 
         // Then check fallback queue
         if (this.fallbackQueue.length > 0) {
-            const track = this.fallbackQueue.shift()!;
-            
-            // If fallback queue is now empty, reload it
-            if (this.fallbackQueue.length === 0 && this.currentFallbackPlaylistUrl && accessToken) {
-                logger.info('Fallback queue empty, reloading from playlist');
-                await this.loadFallbackPlaylist(this.currentFallbackPlaylistUrl, accessToken);
-            }
-            
+            const track = this.fallbackQueue[0]; // Peek, don't remove
             return { track, isFallback: true };
         }
 
@@ -174,13 +167,44 @@ export class QueueManager {
             logger.info('No tracks in fallback queue, attempting to load from playlist');
             const success = await this.loadFallbackPlaylist(this.currentFallbackPlaylistUrl, accessToken);
             if (success && this.fallbackQueue.length > 0) {
-                const track = this.fallbackQueue.shift()!;
+                const track = this.fallbackQueue[0]; // Peek, don't remove
                 return { track, isFallback: true };
             }
         }
 
         logger.info(`No tracks available. Fallback queue: ${this.fallbackQueue.length}, Fallback URL: ${this.currentFallbackPlaylistUrl}, Has token: ${!!accessToken}`);
         return null;
+    }
+
+    /**
+     * Get the next track to play (prioritizes submitted tracks over fallback)
+     * DEPRECATED: Use peekNextTrack() + consumeNextTrack() for safer playback handling
+     * Returns null if no tracks available
+     */
+    async getNextTrack(accessToken?: string): Promise<{ track: SubmittedTrack; isFallback: boolean } | null> {
+        const nextTrack = await this.peekNextTrack(accessToken);
+        if (nextTrack) {
+            this.consumeNextTrack(nextTrack.isFallback);
+        }
+        return nextTrack;
+    }
+
+    /**
+     * Remove the next track from the queue after successful playback start
+     * Should be called AFTER confirming playback has started
+     */
+    consumeNextTrack(isFallback: boolean): void {
+        if (isFallback) {
+            if (this.fallbackQueue.length > 0) {
+                this.fallbackQueue.shift();
+                logger.info(`Consumed fallback track from queue. Remaining: ${this.fallbackQueue.length}`);
+            }
+        } else {
+            if (this.submittedTracks.length > 0) {
+                this.submittedTracks.shift();
+                logger.info(`Consumed submitted track from queue. Remaining: ${this.submittedTracks.length}`);
+            }
+        }
     }
 
     /**
