@@ -1082,13 +1082,15 @@ function startWebSocketServer(server: http.Server): void {
                             
                             // Add user connected event to history
                             const loginType = spotifyName ? 'spotify' : 'offline';
-                            history.push({
-                                type: 'user_connected',
+                            const connectEvent = {
+                                type: 'user_connected' as const,
                                 timestamp: Date.now(),
                                 userName: spotifyName || listenerName || 'Unknown',
                                 userEmail: currentUserEmail || '',
                                 details: { loginType }
-                            });
+                            };
+                            logger.info('Adding user_connected event to history:', JSON.stringify(connectEvent));
+                            history.push(connectEvent);
                             broadcastHistory();
                             break;
                         case 'get_tracks':
@@ -2090,6 +2092,7 @@ function formatUptime(seconds: number): string {
 
 function broadcastHistory() {
     const historyList = history.slice(-100); // Limit to last 100 events
+    logger.info(`Broadcasting history (${historyList.length} events). Sample of last event:`, historyList.length > 0 ? JSON.stringify(historyList[historyList.length - 1]) : 'none');
     for (const [sessionId, session] of sessions.entries()) {
         if (!session.ws || session.ws.readyState !== 1) continue;
         session.ws.send(JSON.stringify({ type: 'history', history: historyList }));
