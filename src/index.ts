@@ -349,6 +349,7 @@ function getDisplayTrackList() {
         album: t.album,
         albumArtUrl: t.albumArtUrl,
         jammers: t.jammers || [],
+        jamCounts: t.jamCounts || {},
         isFallback: false
     }));
     
@@ -368,6 +369,7 @@ function getDisplayTrackList() {
                 album: fallbackTrack.album,
                 albumArtUrl: fallbackTrack.albumArtUrl,
                 jammers: fallbackTrack.jammers || [],
+                jamCounts: fallbackTrack.jamCounts || {},
                 isFallback: true
             });
         }
@@ -766,6 +768,8 @@ async function pollMasterUserPlayback() {
                         saveTracksToFile();
                     }
                     logger.info(`✓ Track consumed from queue (natural progression)`);
+                    // Broadcast updated track list after consumption
+                    broadcastTrackList();
                 } else {
                     currentlyPlayingTrack = null;
                     masterTrackStarted = false;
@@ -938,6 +942,8 @@ async function pollMasterUserPlayback() {
                             saveTracksToFile();
                         }
                         logger.info(`✓ Track consumed from queue (100% complete)`);
+                        // Broadcast updated track list after consumption
+                        broadcastTrackList();
                     } else {
                         // No more tracks in queue and no fallback
                         currentlyPlayingTrack = null;
@@ -1513,6 +1519,8 @@ function startWebSocketServer(server: http.Server): void {
                                         saveTracksToFile();
                                     }
                                     logger.info(`✓ Track consumed from queue (manual skip)`);
+                                    // Broadcast updated track list after consumption
+                                    broadcastTrackList();
                                 } else {
                                     logger.info('No more tracks to skip to');
                                 }
@@ -1551,6 +1559,8 @@ function startWebSocketServer(server: http.Server): void {
                                 queueManager.consumeNextTrack(fallbackTrackInfo.isFallback);
                                 currentTrackConsumed = true;
                                 logger.info(`✓ Track consumed from queue (manual start fallback)`);
+                                // Broadcast updated track list after consumption
+                                broadcastTrackList();
                                 startPolling();
                             } else {
                                 logger.warn('No fallback tracks available');
