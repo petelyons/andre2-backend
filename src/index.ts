@@ -1022,6 +1022,7 @@ function startWebSocketServer(server: http.Server): void {
                             sessionId = message.userId || '';
                             logger.info('=== WEBSOCKET LOGIN ATTEMPT ===', { sessionId });
                             
+                            let isNewSession = false;
                             if (sessionId && sessions.has(sessionId)) {
                                 session = sessions.get(sessionId)!;
                                 session.ws = ws;
@@ -1030,10 +1031,12 @@ function startWebSocketServer(server: http.Server): void {
                                     hasSpotify: !!session.state?.spotify,
                                     hasListener: !!session.state?.listener,
                                 });
+                                isNewSession = false; // Reconnection, not a new session
                             } else if (sessionId) {
                                 session = { ws, userId: sessionId, state: {}, lastHeartbeat: Date.now() };
                                 sessions.set(sessionId, session);
                                 logger.warn(`Created new empty session (should not happen): ${sessionId}`);
+                                isNewSession = true;
                             }
                             // Clear any pending cleanup timer
                             if (sessionId && sessionCleanupTimers.has(sessionId)) {
@@ -1140,18 +1143,22 @@ function startWebSocketServer(server: http.Server): void {
                             broadcastSessionList();
                             serializeSessions();
                             
-                            // Add user connected event to history
-                            const loginType = spotifyName ? 'spotify' : 'offline';
-                            const connectEvent = {
-                                type: 'user_connected' as const,
-                                timestamp: Date.now(),
-                                userName: spotifyName || listenerName || 'Unknown',
-                                userEmail: currentUserEmail || '',
-                                details: { loginType }
-                            };
-                            logger.info('Adding user_connected event to history:', JSON.stringify(connectEvent));
-                            history.push(connectEvent);
-                            broadcastHistory();
+                            // Add user connected event to history ONLY for new sessions (not reconnections)
+                            if (isNewSession) {
+                                const loginType = spotifyName ? 'spotify' : 'offline';
+                                const connectEvent = {
+                                    type: 'user_connected' as const,
+                                    timestamp: Date.now(),
+                                    userName: spotifyName || listenerName || 'Unknown',
+                                    userEmail: currentUserEmail || '',
+                                    details: { loginType }
+                                };
+                                logger.info('Adding user_connected event to history (new session):', JSON.stringify(connectEvent));
+                                history.push(connectEvent);
+                                broadcastHistory();
+                            } else {
+                                logger.info(`Skipping user_connected event for ${currentUserEmail} (reconnection, not new session)`);
+                            }
                             break;
                         case 'get_tracks':
                             // Respond with the current track list
