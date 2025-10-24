@@ -70,6 +70,7 @@ interface JamMessage {
     type: 'jam';
     spotifyUri: string;
     sessionId: string;
+    unjam?: boolean; // true for shift-click to unjam
 }
 
 interface PlayMessage {
@@ -1248,7 +1249,7 @@ function startWebSocketServer(server: http.Server): void {
                                             artist: fallbackTrack.artist || '',
                                             album: fallbackTrack.album || '',
                                             albumArtUrl: fallbackTrack.albumArtUrl || '',
-                                            jammers: [jammerEmail] // Start with the jammer as a jammer
+                                            jamCounts: { [jammerEmail]: 1 } // Start with 1 jam from the user who added it
                                         });
                                         saveTracksToFile();
                                         history.push({
@@ -1266,20 +1267,39 @@ function startWebSocketServer(server: http.Server): void {
                                     break; // Exit early for fallback tracks
                                 }
                                 
+                                // Helper function to migrate old jammers array to jamCounts
+                                const migrateJammers = (t: any) => {
+                                    if (!t.jamCounts) t.jamCounts = {};
+                                    if (Array.isArray(t.jammers) && t.jammers.length > 0) {
+                                        // Migrate: each email in jammers gets 1 jam
+                                        for (const email of t.jammers) {
+                                            if (!t.jamCounts[email]) t.jamCounts[email] = 1;
+                                        }
+                                        t.jammers = []; // Clear old array after migration
+                                    }
+                                };
+                                
                                 // Update in queue (for regular submitted tracks)
                                 const track = queueManager.getSubmittedTracks().find(t => t.spotifyUri === message.spotifyUri);
                                 let jammed = false;
                                 if (track) {
-                                    if (!Array.isArray(track.jammers)) track.jammers = [];
-                                    const idx = track.jammers.indexOf(jammerEmail);
-                                    if (idx === -1) {
-                                        track.jammers.push(jammerEmail);
+                                    migrateJammers(track);
+                                    if (message.unjam) {
+                                        // Shift-click: unjam (decrement or remove)
+                                        if (track.jamCounts![jammerEmail] && track.jamCounts![jammerEmail] > 0) {
+                                            track.jamCounts![jammerEmail]--;
+                                            if (track.jamCounts![jammerEmail] === 0) {
+                                                delete track.jamCounts![jammerEmail];
+                                            }
+                                            updated = true;
+                                            jammed = false;
+                                        }
+                                    } else {
+                                        // Regular click: jam (increment)
+                                        if (!track.jamCounts![jammerEmail]) track.jamCounts![jammerEmail] = 0;
+                                        track.jamCounts![jammerEmail]++;
                                         updated = true;
                                         jammed = true;
-                                    } else {
-                                        track.jammers.splice(idx, 1);
-                                        updated = true;
-                                        jammed = false;
                                     }
                                 }
                                 // Update currently playing track if it matches
@@ -1287,20 +1307,28 @@ function startWebSocketServer(server: http.Server): void {
                                     currentlyPlayingTrack &&
                                     currentlyPlayingTrack.spotifyUri === message.spotifyUri
                                 ) {
-                                    if (!Array.isArray(currentlyPlayingTrack.jammers)) currentlyPlayingTrack.jammers = [];
-                                    const idx = currentlyPlayingTrack.jammers.indexOf(jammerEmail);
-                                    if (idx === -1) {
-                                        currentlyPlayingTrack.jammers.push(jammerEmail);
+                                    migrateJammers(currentlyPlayingTrack);
+                                    if (message.unjam) {
+                                        // Shift-click: unjam (decrement or remove)
+                                        if (currentlyPlayingTrack.jamCounts![jammerEmail] && currentlyPlayingTrack.jamCounts![jammerEmail] > 0) {
+                                            currentlyPlayingTrack.jamCounts![jammerEmail]--;
+                                            if (currentlyPlayingTrack.jamCounts![jammerEmail] === 0) {
+                                                delete currentlyPlayingTrack.jamCounts![jammerEmail];
+                                            }
+                                            updated = true;
+                                            jammed = false;
+                                        }
+                                    } else {
+                                        // Regular click: jam (increment)
+                                        if (!currentlyPlayingTrack.jamCounts![jammerEmail]) currentlyPlayingTrack.jamCounts![jammerEmail] = 0;
+                                        currentlyPlayingTrack.jamCounts![jammerEmail]++;
                                         updated = true;
                                         jammed = true;
-                                    } else {
-                                        currentlyPlayingTrack.jammers.splice(idx, 1);
-                                        updated = true;
-                                        jammed = false;
                                     }
                                 }
                                 if (updated) {
-                                    logger.info(`User ${jammerEmail} toggled jam for track ${message.spotifyUri}`);
+                                    const action = message.unjam ? 'unjammed' : 'jammed';
+                                    logger.info(`User ${jammerEmail} ${action} track ${message.spotifyUri}`);
                                     history.push({
                                         type: jammed ? 'jam' : 'unjam',
                                         timestamp: Date.now(),
@@ -1308,6 +1336,7 @@ function startWebSocketServer(server: http.Server): void {
                                         userEmail: jammerEmail,
                                         details: { track: (track?.name || currentlyPlayingTrack?.name || message.spotifyUri), jammed }
                                     });
+                                    saveTracksToFile(); // Save the updated jam counts
                                     broadcastTrackList();
                                     broadcastMode();
                                     broadcastHistory();

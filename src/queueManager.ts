@@ -10,7 +10,8 @@ export interface SubmittedTrack {
     artist?: string;
     album?: string;
     albumArtUrl?: string;
-    jammers?: string[];
+    jammers?: string[]; // Legacy: array of emails (will be migrated)
+    jamCounts?: { [email: string]: number }; // New: email -> jam count
     progress?: { position_ms: number; duration_ms: number } | null;
 }
 
