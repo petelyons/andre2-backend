@@ -1227,8 +1227,46 @@ function startWebSocketServer(server: http.Server): void {
                                 // Get the user's email
                                 const jammerSession = sessions.get(message.sessionId);
                                 const jammerEmail = jammerSession?.state?.spotify?.email || jammerSession?.state?.listener?.email || '';
+                                const jammerName = jammerSession?.state?.spotify?.name || jammerSession?.state?.listener?.name || 'Unknown';
                                 if (!jammerEmail) return; // Don't allow jam if no email
-                                // Update in queue
+                                
+                                // Check if this is a fallback track
+                                const fallbackTrack = queueManager.getFallbackTracks().find(t => t.spotifyUri === message.spotifyUri);
+                                
+                                if (fallbackTrack) {
+                                    // For fallback tracks: jamming means adding to the real queue
+                                    logger.info(`User ${jammerEmail} is adding fallback track ${message.spotifyUri} to real queue`);
+                                    
+                                    // Check if already in submitted tracks
+                                    if (!queueManager.hasTrack(message.spotifyUri)) {
+                                        queueManager.addTrack({
+                                            spotifyUri: fallbackTrack.spotifyUri,
+                                            userEmail: jammerEmail,
+                                            spotifyName: jammerName,
+                                            timestamp: Date.now(),
+                                            name: fallbackTrack.name || '',
+                                            artist: fallbackTrack.artist || '',
+                                            album: fallbackTrack.album || '',
+                                            albumArtUrl: fallbackTrack.albumArtUrl || '',
+                                            jammers: [jammerEmail] // Start with the jammer as a jammer
+                                        });
+                                        saveTracksToFile();
+                                        history.push({
+                                            type: 'track_added',
+                                            timestamp: Date.now(),
+                                            userName: jammerName,
+                                            userEmail: jammerEmail,
+                                            details: { track: fallbackTrack.name || message.spotifyUri }
+                                        });
+                                        broadcastTrackList();
+                                        broadcastHistory();
+                                    } else {
+                                        logger.info(`Fallback track ${message.spotifyUri} already in submitted queue`);
+                                    }
+                                    break; // Exit early for fallback tracks
+                                }
+                                
+                                // Update in queue (for regular submitted tracks)
                                 const track = queueManager.getSubmittedTracks().find(t => t.spotifyUri === message.spotifyUri);
                                 let jammed = false;
                                 if (track) {
@@ -1263,7 +1301,6 @@ function startWebSocketServer(server: http.Server): void {
                                 }
                                 if (updated) {
                                     logger.info(`User ${jammerEmail} toggled jam for track ${message.spotifyUri}`);
-                                    const jammerName = jammerSession?.state?.spotify?.name || jammerSession?.state?.listener?.name || 'Unknown';
                                     history.push({
                                         type: jammed ? 'jam' : 'unjam',
                                         timestamp: Date.now(),
