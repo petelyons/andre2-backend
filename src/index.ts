@@ -759,6 +759,13 @@ async function pollMasterUserPlayback() {
                 if (nextTrackInfo) {
                     const newTrack = nextTrackInfo.track;
                     await setCurrentTrackAndStart(newTrack, nextTrackInfo.isFallback, true);
+                    // Immediately consume since this is a natural track progression (previous track ended)
+                    queueManager.consumeNextTrack(nextTrackInfo.isFallback);
+                    currentTrackConsumed = true;
+                    if (!nextTrackInfo.isFallback) {
+                        saveTracksToFile();
+                    }
+                    logger.info(`✓ Track consumed from queue (natural progression)`);
                 } else {
                     currentlyPlayingTrack = null;
                     masterTrackStarted = false;
@@ -924,6 +931,13 @@ async function pollMasterUserPlayback() {
                     if (nextTrackInfo) {
                         const newTrack = nextTrackInfo.track;
                         await setCurrentTrackAndStart(newTrack, nextTrackInfo.isFallback, true);
+                        // Immediately consume since track is 100% complete (natural progression)
+                        queueManager.consumeNextTrack(nextTrackInfo.isFallback);
+                        currentTrackConsumed = true;
+                        if (!nextTrackInfo.isFallback) {
+                            saveTracksToFile();
+                        }
+                        logger.info(`✓ Track consumed from queue (100% complete)`);
                     } else {
                         // No more tracks in queue and no fallback
                         currentlyPlayingTrack = null;
@@ -1487,6 +1501,13 @@ function startWebSocketServer(server: http.Server): void {
                                 if (nextTrackInfo) {
                                     const newTrack = nextTrackInfo.track;
                                     await setCurrentTrackAndStart(newTrack, nextTrackInfo.isFallback, false);
+                                    // Immediately consume since this is a manual skip
+                                    queueManager.consumeNextTrack(nextTrackInfo.isFallback);
+                                    currentTrackConsumed = true;
+                                    if (!nextTrackInfo.isFallback) {
+                                        saveTracksToFile();
+                                    }
+                                    logger.info(`✓ Track consumed from queue (manual skip)`);
                                 } else {
                                     logger.info('No more tracks to skip to');
                                 }
@@ -1521,6 +1542,10 @@ function startWebSocketServer(server: http.Server): void {
                                 const fbTrack = fallbackTrackInfo.track;
                                 mode = 'master_play';
                                 await setCurrentTrackAndStart(fbTrack, fallbackTrackInfo.isFallback, false);
+                                // Immediately consume since this is a manual start
+                                queueManager.consumeNextTrack(fallbackTrackInfo.isFallback);
+                                currentTrackConsumed = true;
+                                logger.info(`✓ Track consumed from queue (manual start fallback)`);
                                 startPolling();
                             } else {
                                 logger.warn('No fallback tracks available');
