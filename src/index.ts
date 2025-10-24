@@ -1231,11 +1231,12 @@ function startWebSocketServer(server: http.Server): void {
                                 const jammerName = jammerSession?.state?.spotify?.name || jammerSession?.state?.listener?.name || 'Unknown';
                                 if (!jammerEmail) return; // Don't allow jam if no email
                                 
-                                // Check if this is a fallback track
+                                // Check if this is a fallback track (not currently playing)
                                 const fallbackTrack = queueManager.getFallbackTracks().find(t => t.spotifyUri === message.spotifyUri);
+                                const isCurrentlyPlaying = currentlyPlayingTrack && currentlyPlayingTrack.spotifyUri === message.spotifyUri;
                                 
-                                if (fallbackTrack) {
-                                    // For fallback tracks: jamming means adding to the real queue
+                                if (fallbackTrack && !isCurrentlyPlaying) {
+                                    // For fallback tracks NOT currently playing: jamming means adding to the real queue
                                     logger.info(`User ${jammerEmail} is adding fallback track ${message.spotifyUri} to real queue`);
                                     
                                     // Check if already in submitted tracks
@@ -1264,8 +1265,10 @@ function startWebSocketServer(server: http.Server): void {
                                     } else {
                                         logger.info(`Fallback track ${message.spotifyUri} already in submitted queue`);
                                     }
-                                    break; // Exit early for fallback tracks
+                                    break; // Exit early for fallback tracks in queue
                                 }
+                                
+                                // If it's a fallback track that's currently playing, fall through to normal jam logic below
                                 
                                 // Helper function to migrate old jammers array to jamCounts
                                 const migrateJammers = (t: any) => {
