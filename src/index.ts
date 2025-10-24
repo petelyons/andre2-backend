@@ -1081,12 +1081,13 @@ function startWebSocketServer(server: http.Server): void {
                             serializeSessions();
                             
                             // Add user connected event to history
+                            const loginType = spotifyName ? 'spotify' : 'offline';
                             history.push({
                                 type: 'user_connected',
                                 timestamp: Date.now(),
                                 userName: spotifyName || listenerName || 'Unknown',
                                 userEmail: currentUserEmail || '',
-                                details: {}
+                                details: { loginType }
                             });
                             broadcastHistory();
                             break;
