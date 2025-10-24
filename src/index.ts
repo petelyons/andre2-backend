@@ -2127,6 +2127,17 @@ function formatUptime(seconds: number): string {
   await loadSessionsFromFile();
   await loadTracksFromFile();
   loadHistoryFromFile();
+  
+  // Add system restart event to history
+  history.push({
+    type: 'user_connected',
+    timestamp: Date.now(),
+    userName: 'System',
+    userEmail: 'system@server',
+    details: { loginType: 'system', restart: true }
+  });
+  logger.info('Added system restart event to history');
+  
   cleanupInvalidSessions();
   
   // Load fallback playlist if configured
