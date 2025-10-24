@@ -236,16 +236,18 @@ function saveTracksToFile() {
         logger.error('Failed to save tracks to file:', err);
     }
 }
-function loadTracksFromFile() {
+async function loadTracksFromFile() {
     if (fs.existsSync(TRACKS_FILE)) {
         try {
             const data = fs.readFileSync(TRACKS_FILE, 'utf-8');
             const arr = JSON.parse(data);
             if (Array.isArray(arr)) {
                 const loadedTracks: SubmittedTrack[] = [];
+                let needsMigration = false;
                 for (const t of arr) {
                     // Migration: convert sessionId to userEmail if needed
                     if (t.sessionId && !t.userEmail) {
+                        needsMigration = true;
                         // Try to find the session to get the email
                         const session = sessions.get(t.sessionId);
                         if (session) {
@@ -264,13 +266,35 @@ function loadTracksFromFile() {
                             delete t.sessionId;
                         }
                     }
+                    
+                    // Migration: fetch missing album art
+                    if (t.spotifyUri && !t.albumArtUrl && t.name && t.artist) {
+                        needsMigration = true;
+                        logger.info(`Fetching missing album art for: ${t.name}`);
+                        const masterSession = masterUserSessionId ? sessions.get(masterUserSessionId) : null;
+                        const masterAccessToken = masterSession?.state?.spotify?.access_token;
+                        if (masterAccessToken) {
+                            try {
+                                const match = t.spotifyUri.match(/spotify:track:([a-zA-Z0-9]+)/);
+                                const trackId = match ? match[1] : t.spotifyUri;
+                                const trackInfo = await getSpotifyTrackInfo(masterAccessToken, trackId);
+                                if (trackInfo.albumArtUrl) {
+                                    t.albumArtUrl = trackInfo.albumArtUrl;
+                                    logger.info(`✓ Added album art for: ${t.name}`);
+                                }
+                            } catch (err) {
+                                logger.warn(`Failed to fetch album art for ${t.name}:`, err);
+                            }
+                        }
+                    }
+                    
                     loadedTracks.push(t);
                 }
                 queueManager.setSubmittedTracks(loadedTracks);
                 // Save the migrated tracks back to file
-                if (arr.some(t => t.sessionId)) {
+                if (needsMigration) {
                     saveTracksToFile();
-                    logger.info('Migrated tracks from sessionId to userEmail format');
+                    logger.info('Migrated tracks: updated userEmail and album art');
                 }
             }
         } catch (err) {
@@ -780,13 +804,21 @@ async function pollMasterUserPlayback() {
                             if (!justManuallySkipped && newTrack.name && newTrack.artist) {
                                 const startingUserName = masterUserSessionId ? (sessions.get(masterUserSessionId)?.state?.spotify?.name || sessions.get(masterUserSessionId)?.state?.listener?.name || 'Unknown') : 'Unknown';
                                 const startingUserEmail = masterUserSessionId ? (sessions.get(masterUserSessionId)?.state?.spotify?.email || sessions.get(masterUserSessionId)?.state?.listener?.email || '') : '';
-                                history.push({
-                                    type: 'track_play',
+                                const trackPlayEvent = {
+                                    type: 'track_play' as const,
                                     timestamp: Date.now(),
                                     userName: startingUserName,
                                     userEmail: startingUserEmail,
                                     details: { track: { ...newTrack } }
-                                });
+                                };
+                                logger.info('Adding track_play to history:', JSON.stringify({
+                                    name: newTrack.name,
+                                    artist: newTrack.artist,
+                                    album: newTrack.album,
+                                    hasAlbumArt: !!newTrack.albumArtUrl,
+                                    albumArtUrl: newTrack.albumArtUrl ? newTrack.albumArtUrl.substring(0, 50) + '...' : null
+                                }));
+                                history.push(trackPlayEvent);
                             }
                             
                             broadcastTrackList();
@@ -2065,7 +2097,7 @@ function formatUptime(seconds: number): string {
 // Start HTTP server
 (async () => {
   await loadSessionsFromFile();
-  loadTracksFromFile();
+  await loadTracksFromFile();
   cleanupInvalidSessions();
   
   // Load fallback playlist if configured
