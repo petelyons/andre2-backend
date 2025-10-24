@@ -224,16 +224,44 @@ const playHistory: PlayHistoryEntry[] = [];
 //     redirectUri: process.env.SPOTIFY_REDIRECT_URI,
 // });
 
-// JSON persistence for submittedTracks
+// JSON persistence for submittedTracks, sessions, and history
 // Use DATA_DIR environment variable if set, otherwise use __dirname for local development
 const DATA_DIR = process.env.DATA_DIR || __dirname;
 const TRACKS_FILE = path.join(DATA_DIR, 'tracks.json');
 const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
+const HISTORY_FILE = path.join(DATA_DIR, 'history.json');
+const MAX_HISTORY_EVENTS = 500;
 function saveTracksToFile() {
     try {
         fs.writeFileSync(TRACKS_FILE, JSON.stringify(queueManager.getSubmittedTracks(), null, 2));
     } catch (err) {
         logger.error('Failed to save tracks to file:', err);
+    }
+}
+
+function saveHistoryToFile() {
+    try {
+        // Keep only the last MAX_HISTORY_EVENTS
+        const historyToSave = history.slice(-MAX_HISTORY_EVENTS);
+        fs.writeFileSync(HISTORY_FILE, JSON.stringify(historyToSave, null, 2));
+    } catch (err) {
+        logger.error('Failed to save history to file:', err);
+    }
+}
+
+function loadHistoryFromFile() {
+    if (fs.existsSync(HISTORY_FILE)) {
+        try {
+            const data = fs.readFileSync(HISTORY_FILE, 'utf-8');
+            const arr = JSON.parse(data);
+            if (Array.isArray(arr)) {
+                // Load history events, keeping only the last MAX_HISTORY_EVENTS
+                history.push(...arr.slice(-MAX_HISTORY_EVENTS));
+                logger.info(`Loaded ${history.length} history events from file`);
+            }
+        } catch (err) {
+            logger.error('Failed to load history from file:', err);
+        }
     }
 }
 async function loadTracksFromFile() {
@@ -2098,6 +2126,7 @@ function formatUptime(seconds: number): string {
 (async () => {
   await loadSessionsFromFile();
   await loadTracksFromFile();
+  loadHistoryFromFile();
   cleanupInvalidSessions();
   
   // Load fallback playlist if configured
@@ -2123,7 +2152,16 @@ function formatUptime(seconds: number): string {
 })(); 
 
 function broadcastHistory() {
-    const historyList = history.slice(-100); // Limit to last 100 events
+    // Trim history to MAX_HISTORY_EVENTS
+    if (history.length > MAX_HISTORY_EVENTS) {
+        history.splice(0, history.length - MAX_HISTORY_EVENTS);
+        logger.info(`Trimmed history to ${MAX_HISTORY_EVENTS} events`);
+    }
+    
+    // Save to file whenever history is broadcast
+    saveHistoryToFile();
+    
+    const historyList = history.slice(-100); // Limit to last 100 events for broadcast
     logger.info(`Broadcasting history (${historyList.length} events). Sample of last event:`, historyList.length > 0 ? JSON.stringify(historyList[historyList.length - 1]) : 'none');
     for (const [sessionId, session] of sessions.entries()) {
         if (!session.ws || session.ws.readyState !== 1) continue;
